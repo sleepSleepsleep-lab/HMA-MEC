@@ -1,0 +1,18 @@
+# Python 依赖清单
+# 安装：pip install -r requirements.txt
+
+# ---- 数值与张量 ----
+numpy>=1.24
+torch>=2.0            # GPU 端蒸馏训练必需；本地 CPU 安装 CPU 版本即可
+
+# ---- LLM 客户端 ----
+openai>=1.0           # DeepSeek / OpenAI / vLLM 共用此包
+# transformers>=4.40  # 仅在使用 local_transformers 后端时需要
+# vllm>=0.5           # 仅在使用 local_vllm 后端时需要
+
+# ---- 可视化 ----
+matplotlib>=3.8
+
+# ---- 工具 ----
+tqdm>=4.65            # 进度条
+pyyaml>=6.0           # 可选，用于日志配置
