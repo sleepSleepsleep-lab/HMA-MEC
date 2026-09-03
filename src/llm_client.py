@@ -88,6 +88,10 @@ class LLMClient:
         self.backend = backend
         self._last_call_time = 0.0
         self._rate_limiter = _GLOBAL_RATE_LIMITER
+        # token 用量统计 (vLLM/OpenAI 兼容后端返回 usage 时累加),
+        # 供 token 成本随规模增长实验 (E20) 使用
+        self.usage_stats = {'prompt_tokens': 0, 'completion_tokens': 0,
+                            'calls': 0}
 
     # -------- 公共接口 --------
     def chat(self, system, user, temperature=LLM_TEMPERATURE,
@@ -167,10 +171,7 @@ class _OpenAICompatibleClient(LLMClient):
             max_tokens=max_tokens,
             extra_body=extra if extra else None,
         )
-        msg = resp.choices[0].message
-        content = msg.content or ""
-        reasoning = getattr(msg, 'reasoning_content', None) or ""
-        return (reasoning + content).strip()
+        return resp.choices[0].message.content.strip()
 
 
 # ---------------- 本地 vLLM 实现 ----------------
@@ -188,7 +189,7 @@ class _VLLMClient(LLMClient):
         base_url = f"http://localhost:{LLM_LOCAL_PORT}/v1"
         # vLLM 通常用空 api_key 即可
         self.client = OpenAI(api_key="EMPTY", base_url=base_url)
-        self.model = LLM_MODEL
+        self.model = os.path.basename(LLM_LOCAL_MODEL_PATH.rstrip("/"))
 
     def _chat_impl(self, system, user, temperature, max_tokens):
         resp = self.client.chat.completions.create(
@@ -200,55 +201,42 @@ class _VLLMClient(LLMClient):
             temperature=temperature,
             max_tokens=max_tokens,
         )
-        msg = resp.choices[0].message
-        content = msg.content or ""
-        reasoning = getattr(msg, 'reasoning_content', None) or ""
-        return (reasoning + content).strip()
+        u = getattr(resp, 'usage', None)
+        if u is not None:
+            self.usage_stats['prompt_tokens'] += int(u.prompt_tokens)
+            self.usage_stats['completion_tokens'] += int(u.completion_tokens)
+            self.usage_stats['calls'] += 1
+        return resp.choices[0].message.content.strip()
 
 
 # ---------------- 本地 transformers 实现（开发调试用） ----------------
-# 全局单例模型对象（避免多线程各自加载导致 OOM）
-_TRANSFORMERS_LOCK = threading.Lock()
-_TRANSFORMERS_MODEL = None
-_TRANSFORMERS_TOKENIZER = None
-
 class _TransformersClient(LLMClient):
-    """单进程 transformers 推理，速度较慢，仅用于本地无网络环境调试。
-    所有线程共享同一个模型实例（带锁），避免多线程 OOM。
-    """
+    """单进程 transformers 推理，速度较慢，仅用于本地无网络环境调试。"""
 
     def __init__(self):
         super().__init__(backend="local_transformers")
-        global _TRANSFORMERS_MODEL, _TRANSFORMERS_TOKENIZER
-        with _TRANSFORMERS_LOCK:
-            if _TRANSFORMERS_MODEL is None:
-                try:
-                    import torch
-                    from transformers import AutoModelForCausalLM, AutoTokenizer
-                except ImportError as e:
-                    raise ImportError(
-                        "未安装 torch / transformers，请运行 pip install torch transformers。"
-                    ) from e
-                _TRANSFORMERS_TOKENIZER = AutoTokenizer.from_pretrained(
-                    LLM_LOCAL_MODEL_PATH, trust_remote_code=True)
-                _TRANSFORMERS_MODEL = AutoModelForCausalLM.from_pretrained(
-                    LLM_LOCAL_MODEL_PATH, trust_remote_code=True,
-                    torch_dtype=torch.float16,
-                ).cuda() if torch.cuda.is_available() else AutoModelForCausalLM.from_pretrained(
-                    LLM_LOCAL_MODEL_PATH, trust_remote_code=True)
-                _TRANSFORMERS_MODEL.eval()
-        self.tok = _TRANSFORMERS_TOKENIZER
-        self.model = _TRANSFORMERS_MODEL
-        self._inference_lock = _TRANSFORMERS_LOCK  # 共享锁，串行推理
+        try:
+            import torch
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+        except ImportError as e:
+            raise ImportError(
+                "未安装 torch / transformers，请运行 pip install torch transformers。"
+            ) from e
+        self.tok = AutoTokenizer.from_pretrained(
+            LLM_LOCAL_MODEL_PATH, trust_remote_code=True)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            LLM_LOCAL_MODEL_PATH, trust_remote_code=True,
+            torch_dtype=torch.float16,
+        ).cuda() if torch.cuda.is_available() else AutoModelForCausalLM.from_pretrained(
+            LLM_LOCAL_MODEL_PATH, trust_remote_code=True)
+        self.model.eval()
 
     def _chat_impl(self, system, user, temperature, max_tokens):
         import torch
-        prompt = self.tok.apply_chat_template(
-            [{"role": "system", "content": system},
-             {"role": "user", "content": user}],
-            tokenize=False, add_generation_prompt=True)
+        prompt = f"<|im_start|>system\n{system}<|im_end|>\n" \
+                 f"<|im_start|>user\n{user}<|im_end|>\n<|im_start|>assistant\n"
         inputs = self.tok(prompt, return_tensors="pt").to(self.model.device)
-        with self._inference_lock, torch.no_grad():
+        with torch.no_grad():
             out = self.model.generate(
                 **inputs, max_new_tokens=max_tokens,
                 do_sample=(temperature > 0),
