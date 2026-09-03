@@ -39,7 +39,6 @@ ROLE_UA = "UA"   # 用户智能体
 ROLE_EA = "EA"   # 边缘智能体
 ROLE_OA = "OA"   # 编排智能体
 ROLE_VA = "VA"   # 验证智能体
-ROLE_CA = "CA"   # 云端智能体
 
 
 # Agent 可执行的功能算子枚举（用于「功能集 F_a」的形式化）
@@ -62,9 +61,6 @@ FUNCTIONS = {
     # VA 功能
     "VA_SIMULATE":    "反事实仿真",
     "VA_REJECT":      "对 reward hacking 方案拒绝采样",
-    # CA 功能
-    "CA_RECEIVE":     "接收边缘溢出任务并云端执行",
-    "CA_COST_REPORT": "汇报云端处理时延与能耗成本",
 }
 
 
@@ -219,32 +215,6 @@ class OrchestratorAgent(Agent):
 # ============================================================
 # VA: 验证智能体
 # ============================================================
-class CloudAgent(Agent):
-    """云端智能体，对应远程云计算中心。
-
-    场景：全局（接收所有超载边缘节点溢出的任务）
-    功能：无限容量任务接收 / 云端处理成本申报
-    边界：被动模式，仅接收 EA 溢出任务，不主动调度
-    """
-    def __init__(self, env=None):
-        super().__init__(
-            agent_id="CA-0",
-            role=ROLE_CA,
-            scenarios={"global"},
-            functions={"CA_RECEIVE", "CA_COST_REPORT"},
-            boundaries={"PASSIVE_ONLY"},
-        )
-        self.env = env
-
-    def cost_report(self):
-        from config import CLOUD_LATENCY_BASE, CLOUD_TRANSMISSION_FACTOR
-        return {
-            'latency_base': CLOUD_LATENCY_BASE,
-            'tx_factor': CLOUD_TRANSMISSION_FACTOR,
-            'compute_cycles': self.env.f_cloud if self.env else None,
-        }
-
-
 class VerifierAgent(Agent):
     """独立第三方验证智能体，调用环境反事实仿真。"""
     def __init__(self, env=None):
@@ -291,19 +261,17 @@ class VerifierAgent(Agent):
 # ============================================================
 # Agent 生成器：依据系统规模实例化
 # ============================================================
-def make_agents(env, with_va=True, with_cloud=True):
+def make_agents(env, with_va=True):
     """根据 MEC 环境实例生成全套 Agent。
 
     参数：
         env:       MECEnvironment 实例
         with_va:   是否同时生成 Verifier（消融实验可关闭）
-        with_cloud:是否同时生成 CloudAgent（消融实验可关闭）
     返回：dict {
         'UA': List[UserAgent],
         'EA': List[EdgeAgent],
         'OA': OrchestratorAgent,
         'VA': Optional[VerifierAgent],
-        'CA': Optional[CloudAgent],
     }
     """
     K, M = env.K, env.M
@@ -311,8 +279,7 @@ def make_agents(env, with_va=True, with_cloud=True):
     eas = [EdgeAgent(m, env=env) for m in range(M)]
     oa = OrchestratorAgent(env=env)
     va = VerifierAgent(env=env) if with_va else None
-    ca = CloudAgent(env=env) if with_cloud else None
-    return {'UA': uas, 'EA': eas, 'OA': oa, 'VA': va, 'CA': ca, 'env': env}
+    return {'UA': uas, 'EA': eas, 'OA': oa, 'VA': va, 'env': env}
 
 
 def agent_topology_summary(agents):
@@ -321,12 +288,10 @@ def agent_topology_summary(agents):
     n_ea = len(agents['EA'])
     n_oa = 1 if agents.get('OA') is not None else 0
     n_va = 1 if agents.get('VA') is not None else 0
-    n_ca = 1 if agents.get('CA') is not None else 0
     return {
         'K': n_ua, 'M': n_ea,
         'total_agents': n_ua + n_ea + n_oa + n_va,
         'has_verifier': n_va == 1,
-        'has_cloud': n_ca == 1,
         'roles': [a.role for a in agents['UA']] +
                  [a.role for a in agents['EA']] +
                  ([agents['OA'].role] if agents.get('OA') else []) +
