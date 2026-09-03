@@ -31,23 +31,32 @@ import matplotlib.pyplot as plt
 # ============================================================
 PALETTE = {
     # Primary brand: deep teal-navy, used for HMA-MEC family
-    'hma_primary':    '#2E5E7E',   # main HMA-Distill
-    'hma_hybrid':     '#1E3A5F',   # HMA-Hybrid (slightly darker)
-    'hma_fullllm':    '#5B8AA6',   # HMA-FullLLM (lighter teal)
+    'hma_primary':    '#3377A8',   # main HMA-Distill (提亮)
+    'hma_hybrid':     '#24598C',   # HMA-Hybrid (slightly darker)
+    'hma_fullllm':    '#7FB3D9',   # HMA-FullLLM (lighter teal, 提亮)
 
-    # Baselines: vibrant, distinct colors
-    'sac':            '#D94040',   # bright red for primary DRL baseline
-    'ddpg':           '#E08B2B',   # vivid orange
-    'greedy':         '#3E7DAA',   # medium blue
-    'alllocal':       '#8B5E3C',   # warm brown
-    'alledge':        '#3E8E61',   # forest green
-    'random':         '#7E5A9E',   # medium purple
+    # Baselines: muted gray-cool family (so HMA pops)
+    'sac':            '#E15B1F',   # warm vermilion (提亮, Okabe-Ito 系)
+    'ddpg':           '#E69F00',   # bright orange (Okabe-Ito)
+    'greedy':         '#6E84A0',   # slate blue-gray (加深提对比)
+    'alllocal':       '#9FB0C4',   # lighter slate
+ 'alledge':         '#C2CBD6',   # very light gray
+    'random':         '#8799B2',   # mid slate blue
     'comllm':         '#D4A574',   # warm tan (single LLM baseline)
+
+    # DRL/MARL 学习族 + 搜索族 (E1/E20/E21 等; Okabe-Ito/ColorBrewer 扩展, 色盲友好)
+    'dqn':            '#CC79A7',   # Okabe pink/purple
+    'maddpg':         '#17A873',   # Okabe green (提亮)
+    'ga':             '#C8872A',   # ColorBrewer Dark2 brown (提亮)
+    'mpc':            '#4FC1E9',   # Okabe sky blue (提亮)
+    'ledrl':          '#D4A574',   # warm tan (B7 LeDRL)
 
     # Perturbation colors (E6)
     'channel_drop':   '#3E6F89',
     'server_fail':    '#C45B5B',
     'dishonest_ua':   '#7E8C5A',
+    'link_fail':      '#E6AB02',   # ColorBrewer Dark2 yellow
+    'mobility':       '#66A61E',   # ColorBrewer Dark2 yellow-green
 
     # Agent roles (fig_arch)
     'role_env':       '#8DA9C4',
@@ -62,7 +71,7 @@ PALETTE = {
     'secondary':      '#C45B5B',
     'highlight':      '#D4A574',
     'neutral_dark':   '#3A3F45',
-    'neutral_med':    '#8C99A8',
+    'neutral_med':    '#7A8B9E',
     'neutral_light':  '#F4F6F8',
     'grid':           '#D9DEE3',
     'arrow':          '#555555',
@@ -79,6 +88,14 @@ METHOD_COLORS = {
     'Random':        PALETTE['random'],
     'SAC':           PALETTE['sac'],
     'DDPG':          PALETTE['ddpg'],
+    'DQN':           PALETTE['dqn'],
+    'MADDPG':        PALETTE['maddpg'],
+    'GA':            PALETTE['ga'],
+    'MPC':           PALETTE['mpc'],
+    'B7-LeDRL':      PALETTE['ledrl'],
+    'LeDRL':         PALETTE['ledrl'],
+    'B8-SingleLLM':  PALETTE['comllm'],
+    'SingleLLM':     PALETTE['comllm'],
     'B7-COMLLM-lite':PALETTE['comllm'],
     'HMA-Distill':   PALETTE['hma_primary'],
  'HMA-Hybrid':    PALETTE['hma_hybrid'],
@@ -90,6 +107,8 @@ PERTURB_COLORS = {
     'channel_drop':   PALETTE['channel_drop'],
     'server_fail':    PALETTE['server_fail'],
     'dishonest_ua':   PALETTE['dishonest_ua'],
+    'link_fail':      PALETTE['link_fail'],
+    'mobility':       PALETTE['mobility'],
 }
 
 ROLE_COLORS = {
@@ -136,11 +155,11 @@ def set_paper_style():
         'ps.fonttype':        42,
         'savefig.dpi':        1200,
         'figure.dpi':         120,
-        'axes.labelsize':     9,
-        'axes.titlesize':     9,
-        'xtick.labelsize':    8,
-        'ytick.labelsize':    8,
-        'legend.fontsize':     7,
+        'axes.labelsize':     15,
+        'axes.titlesize':     15,
+        'xtick.labelsize':    13,
+        'ytick.labelsize':    13,
+        'legend.fontsize':     12,
         'legend.frameon':     False,
         'axes.edgecolor':     PALETTE['neutral_dark'],
         'axes.linewidth':     0.6,
@@ -156,6 +175,26 @@ def set_paper_style():
     })
 
 
+# ============================================================
+# 5. Unified figure export: PDF + TIFF, 1200 DPI, LZW compression
+# ============================================================
+import os as _os
+
+
+def save_figure(fig, name: str, out_dir: str, dpi: int = 1200):
+    """导出论文图: <name>.pdf 与 <name>.tiff (1200 DPI, TIFF 用 LZW 压缩).
+
+    所有 fig_*.py 必须经此函数导出, 保证提交格式 (PDF/TIFF) 与分辨率统一.
+    """
+    _os.makedirs(out_dir, exist_ok=True)
+    fig.savefig(_os.path.join(out_dir, name + ".pdf"),
+                format="pdf", dpi=dpi, bbox_inches="tight")
+    fig.savefig(_os.path.join(out_dir, name + ".tiff"),
+                format="tiff", dpi=dpi, bbox_inches="tight",
+                pil_kwargs={"compression": "tiff_lzw"})
+    print(f"  saved {name}.pdf / {name}.tiff ({dpi} dpi)")
+
+
 # Marker / linestyle cycle to enhance grayscale distinction
 _METHOD_MARKERS = {
     'Greedy':     's',
@@ -164,6 +203,10 @@ _METHOD_MARKERS = {
     'Random':     'D',
     'SAC':        'o',
     'DDPG':       'P',
+    'DQN':        'X',
+    'MADDPG':     'd',
+    'GA':         'h',
+    'MPC':        '^',
     'HMA-Distill':'o',
     'HMA-Hybrid': 'D',
     'HMA-FullLLM':'^',
