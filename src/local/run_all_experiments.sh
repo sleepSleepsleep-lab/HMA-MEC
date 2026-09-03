@@ -8,7 +8,7 @@ LOG="$LOG_DIR/run_all_$(date +%Y%m%d_%H%M%S).log"
 log() { echo "[$(date '+%H:%M:%S')] $*" | tee -a "$LOG"; }
 
 log "=========================================="
-log " HMA-MEC 全部实验启动"
+log " HMA-MEC 主线实验启动 (E1-E9; E10-E21 见 run_e1x_*.py 单独运行)"
 log "=========================================="
 
 log "检查 vLLM 服务..."
