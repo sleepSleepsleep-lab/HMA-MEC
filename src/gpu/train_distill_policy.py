@@ -49,7 +49,7 @@ def load_dataset(path, max_samples=None):
     """从 jsonl 读取数据集, 过滤为基准规模 (K=8, M=4), 返回 ndarray."""
     K = NUM_USERS; M = NUM_EDGE_SERVERS
     expected_sd = K * 4 + M * 2
-    states, alphas, servers, clouds, confs = [], [], [], [], []
+    states, alphas, servers, confs = [], [], [], []
     n_skipped = 0
 
     if not os.path.exists(path):
@@ -69,13 +69,20 @@ def load_dataset(path, max_samples=None):
             if len(s) != expected_sd or len(a) != K or len(m) != K:
                 n_skipped += 1
                 continue
+            # 2026-08 整改: 防御个别 NaN/Inf 监督值 (Mistral 生成偶发
+            # confidence=NaN 导致蒸馏损失全 NaN), 非有限值样本直接跳过。
+            if not (np.isfinite(s).all() and np.isfinite(a).all()):
+                n_skipped += 1
+                continue
             states.append(s)
             alphas.append(a)
             servers.append(m)
-            if r.get("cloud") is not None:
-                clouds.append(np.asarray(r["cloud"], dtype=int))
             if r.get("confidence") is not None:
-                confs.append(np.asarray(r["confidence"], dtype=np.float32))
+                c_arr = np.asarray(r["confidence"], dtype=np.float32)
+                if c_arr.shape[0] == K and np.isfinite(c_arr).all():
+                    confs.append(c_arr)
+                else:
+                    n_skipped += 1
 
     if not states:
         raise ValueError(f"数据集在基准规模 K={K}, M={M} 下无可用样本 (跳过了 {n_skipped} 条其他规模)")
@@ -84,15 +91,13 @@ def load_dataset(path, max_samples=None):
     states  = np.stack(states, axis=0)
     alphas  = np.stack(alphas, axis=0)
     servers = np.stack(servers, axis=0)
-    clouds  = np.stack(clouds, axis=0) if clouds else None
     confs   = np.stack(confs, axis=0) if confs else None
 
     if max_samples is not None and len(states) > max_samples:
         idx = np.random.permutation(len(states))[:max_samples]
         states, alphas, servers = states[idx], alphas[idx], servers[idx]
-        if clouds is not None: clouds = clouds[idx]
         if confs is not None: confs = confs[idx]
-    return states, alphas, servers, clouds, confs
+    return states, alphas, servers, confs
 
 
 # ============================================================
@@ -118,12 +123,10 @@ def main(epochs=POLICY_NET_EPOCHS, batch=POLICY_NET_BATCH,
     print(f"  数据集已存在 {n_records} 条")
 
     print(f"  加载 {ds_path} ...")
-    states, alphas, servers, clouds, confs = load_dataset(ds_path,
-                                                          max_samples=max_samples)
+    states, alphas, servers, confs = load_dataset(ds_path,
+                                                    max_samples=max_samples)
     print(f"  基准规模样本: N={len(states)}, "
           f"state_dim={states.shape[1]}, K={alphas.shape[1]}")
-    if clouds is not None:
-        print(f"  云端标志监督可用: shape {clouds.shape}")
     if confs is not None:
         print(f"  置信度监督可用: shape {confs.shape}")
 
@@ -136,7 +139,7 @@ def main(epochs=POLICY_NET_EPOCHS, batch=POLICY_NET_BATCH,
         epochs=epochs, batch=batch,
         save_path=sv_path,
     )
-    model, history = trainer.train(states, alphas, servers, clouds=clouds, confidences=confs)
+    model, history = trainer.train(states, alphas, servers, confidences=confs)
 
     # 保存训练历史到 npy 文件（论文训练曲线图用）
     history_path = os.path.splitext(sv_path)[0] + "_history.npy"
