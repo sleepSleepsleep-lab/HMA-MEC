@@ -22,14 +22,10 @@ import json
 import logging
 import numpy as np
 
-from environment import compute_fbl_rate
 from config import (
     CONSENSUS_EPSILON, DEBATE_MAX_ROUNDS,
     NUM_USERS, NUM_EDGE_SERVERS,
-    ENABLE_CLOUD_OFFLOAD, CLOUD_LATENCY_BASE, CLOUD_TRANSMISSION_FACTOR,
-    FBL_BLOCKLENGTH, FBL_MAX_ERROR_PROB,
 )
-from config import BANDWIDTH, NOISE_POWER, TX_POWER_USER
 from llm_client import get_llm_client, parse_json_response
 
 logger = logging.getLogger(__name__)
@@ -75,7 +71,10 @@ ARBITRATE_USER_TEMPLATE = (
     "Edge server capacity / current load:\n{edge_info_json}\n\n"
     "Conflict critiques:\n{critiques_json}\n\n"
     "Predicted OA preference: energy_weight={omega_e:.3f}, "
-    "latency_weight={omega_l:.3f}\n\n"
+    "latency_weight={omega_l:.3f}\n"
+    "Note: if energy preference dominates, you may increase the local "
+    "execution ratio alpha to save transmission/server energy; if latency "
+    "preference dominates, you may decrease alpha to offload more.\n\n"
     "Please arbitrate the conflicts (only adjust users whose server is "
     "overcrowded). Output JSON only with format:\n"
     '{{\n'
@@ -292,6 +291,19 @@ class OrchestratorAgentRunner:
             server_users = {m: [r['user'] for r in revised if r['server'] == m]
                             for m in range(M)}
 
+        # ---- ω 引导 α 修正（E5 Pareto 展开的关键机制，2026-08 整改）----
+        # ω_e 高 → 多本地执行（α↑，省传输与服务器能耗）
+        # ω_l 高 → 多卸载（α↓，低时延）
+        # 连续可调，默认最大 ±0.15；E1 中 preference 默认等权重时 alpha_shift=0，
+        # 行为与旧版完全一致（向后兼容）。
+        pref_e, pref_l = float(self.preference[0]), float(self.preference[1])
+        alpha_shift = (pref_e - pref_l) * 0.15
+        if not flags.get("disable_alpha_shift"):
+            for r in revised:
+                r['alpha'] = float(np.clip(r['alpha'] + alpha_shift, 0.01, 1.0))
+                r['reason'] = (r.get('reason', '')
+                               + f" | ω引导α{alpha_shift:+.2f}")
+
         # 处理过载：若服务器接入用户数 > floor(K/M) + 1，把多余者迁到负载较轻的服务器
         avg_load = max(1, K // M + 1)
         for m in range(M):
@@ -316,17 +328,6 @@ class OrchestratorAgentRunner:
                 # 偏好能耗时：选信道最好的服务器（降低传输能耗）
                 for k_ in to_move:
                     if not free_servers:
-                        # 2026.08: 无可用边缘服务器时，低优先级任务路由到云端
-                        if ENABLE_CLOUD_OFFLOAD:
-                            p_k = self.env.tasks[k_]['priority']
-                            if p_k <= 2:
-                                for r in revised:
-                                    if r['user'] == k_:
-                                        r.setdefault('cloud', 0)
-                                        r['cloud'] = 1
-                                        r['reason'] = (f"arbitrate: 全边缘过载, "
-                                                       f"低优先级 p={p_k} 路由云端")
-                                        break
                         break
                     if fallback_count > 0:
                         # 回退轮次: 用不同策略, 将用户迁移到不同的服务器
@@ -420,11 +421,11 @@ class OrchestratorAgentRunner:
 
         2026.07 修改：从一维 sigmoid(β·Δ_t) 扩展为三维。
         """
-        from config import (CONFIDENCE_BETA_TAU, CONFIDENCE_BETA_SINR,
-                            CONFIDENCE_BETA_LOAD, CONFIDENCE_BETA_FBL)
+        from config import CONFIDENCE_BETA_TAU, CONFIDENCE_BETA_SINR, CONFIDENCE_BETA_LOAD
         K = self.env.K
         M = self.env.M
         confs = np.zeros(K, dtype=np.float32)
+        # 先计算各服务器负载率
         server_loads = np.zeros(M)
         for r in revised:
             s = int(np.clip(r.get('server', 0), 0, M - 1))
@@ -437,26 +438,29 @@ class OrchestratorAgentRunner:
             if u < 0 or u >= K:
                 continue
             tau = self.env.tasks[u]['tau']
+            # 粗估时延：本地与边缘二者 max
             a = float(np.clip(r['alpha'], 0.01, 1.0))
             loc_T = a * self.env.tasks[u]['C'] / self.env.f_local[u]
             s = int(np.clip(r['server'], 0, self.env.M - 1))
             h = self.env.channels[u, s]
-            _, rate, _ = compute_fbl_rate(h, BANDWIDTH, TX_POWER_USER, NOISE_POWER,
-                                           FBL_BLOCKLENGTH, FBL_MAX_ERROR_PROB)
+            from environment import BANDWIDTH, NOISE_POWER, TX_POWER_USER
+            rate = BANDWIDTH * np.log2(1 + TX_POWER_USER * h / NOISE_POWER)
             tx_T = (1 - a) * self.env.tasks[u]['D'] / max(rate, 1e-9)
             comp_T = (1 - a) * self.env.tasks[u]['C'] / self.env.f_edge[s]
             off_T = tx_T + comp_T
             T = max(loc_T, off_T)
 
+            # 三维置信度：
+            # Δ_t: 时延余量分量
             delta_t = (tau - T) / max(tau, 1e-3)
+            # SINR 分量：信道增益归一化
             sinr_norm = float(np.clip(h / 1e-5, 0.0, 1.0))
+            # 负载分量：服务器充裕度 1-ρ
             rho = float(server_loads[s] / max(self.env.f_edge[s], 1e-9)) if self.env.f_edge[s] > 0 else 0.0
-            fbl_reliability = 1.0 - FBL_MAX_ERROR_PROB
             confs[u] = float(1.0 / (1.0 + np.exp(-(
                 CONFIDENCE_BETA_TAU * delta_t
                 + CONFIDENCE_BETA_SINR * sinr_norm
                 + CONFIDENCE_BETA_LOAD * (1.0 - min(rho, 1.0))
-                + CONFIDENCE_BETA_FBL * fbl_reliability
             ))))
         # 若 prev_conf 提供且相邻用户置信度变化极小，平滑一下
         if prev_conf is not None:
@@ -497,18 +501,16 @@ class OrchestratorAgentRunner:
             revised: [{'user','alpha','server'}, ...]
             K, M:    系统规模
         返回：
-            dict {'alpha': float32 (K,), 'server': int (K,), 'cloud': bool (K,)}
+            dict {'alpha': float32 (K,), 'server': int (K,)}
         """
         alpha = np.full(K, 0.5, dtype=np.float32)
         server = np.zeros(K, dtype=int)
-        cloud = np.zeros(K, dtype=bool)
         for r in revised:
             u = int(r['user'])
             if 0 <= u < K:
                 alpha[u] = float(np.clip(r.get('alpha', 0.5), 0.01, 1.0))
                 server[u] = int(np.clip(r.get('server', 0), 0, M - 1))
-                cloud[u] = bool(r.get('cloud', 0))
-        return {'alpha': alpha, 'server': server, 'cloud': cloud}
+        return {'alpha': alpha, 'server': server}
 
 
 # ============================================================
