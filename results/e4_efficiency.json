@@ -1,0 +1,41 @@
+{
+  "Distill": {
+    "stats": {
+      "n_distill_steps": 660,
+      "n_fullllm_steps": 0,
+      "hybrid_trigger_rate": 0.0,
+      "avg_distill_latency_ms": 2.299824989203251,
+      "avg_fullllm_latency_ms": 0.0,
+      "conf_min_mean": 0.680868968819127,
+      "conf_min_min": 0.616774320602417
+    },
+    "mean_run_step_ms": 74.02119445800781,
+    "median_run_step_ms": 70.34480285644531
+  },
+  "Hybrid": {
+    "stats": {
+      "n_distill_steps": 660,
+      "n_fullllm_steps": 0,
+      "hybrid_trigger_rate": 0.0,
+      "avg_distill_latency_ms": 2.1533044901761142,
+      "avg_fullllm_latency_ms": 0.0,
+      "conf_min_mean": 0.6808689820043968,
+      "conf_min_min": 0.616774320602417
+    },
+    "mean_run_step_ms": 84.0413818359375,
+    "median_run_step_ms": 73.552490234375
+  },
+  "FullLLM": {
+    "stats": {
+      "n_distill_steps": 0,
+      "n_fullllm_steps": 10,
+      "hybrid_trigger_rate": 0.0,
+      "avg_distill_latency_ms": 0.0,
+      "avg_fullllm_latency_ms": 67759.9226474762,
+      "conf_min_mean": null,
+      "conf_min_min": null
+    },
+    "mean_run_step_ms": 68037.796875,
+    "median_run_step_ms": 68618.046875
+  }
+}

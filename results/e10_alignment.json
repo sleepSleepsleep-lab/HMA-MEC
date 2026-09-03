@@ -1,0 +1,10 @@
+{
+  "rho_align": 0.5041666666666667,
+  "alpha_mae": 0.12416666666666668,
+  "alpha_mae_std": 0.004487637339278755,
+  "va_reject_full": 1.0,
+  "va_reject_distill": null,
+  "n_states": 30,
+  "n_full_va": 30,
+  "n_distill_va": 0
+}

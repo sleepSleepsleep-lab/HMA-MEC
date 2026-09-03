@@ -1,0 +1,48 @@
+{
+  "_source": "AUTHORITATIVE v2 rerun (2026-09-02): n=30/backend, 5 seeds x 6 eps x 200 steps, E1-style non-colliding env seeds SEED+s*100+e (SEED=42). Mean over 30 episodes. Stale batch of 2026-08-25 backed up in e9_llm_backend.stale_20260825.{json,npz}; per-episode values in e9_llm_backend_v2.{json,npz}.",
+  "backend": [
+    "Qwen2.5-7B",
+    "Llama-3.1-8B",
+    "Mistral-7B"
+  ],
+  "energy": [
+    1.2351045073672255,
+    1.2338742234252678,
+    1.2519843765650158
+  ],
+  "latency": [
+    0.7524252794584833,
+    0.7715620551320336,
+    0.7538966950532073
+  ],
+  "success": [
+    0.8711666666666666,
+    0.865625,
+    0.8703958333333335
+  ],
+  "sla": [
+    0.7527222222222222,
+    0.7478888888888889,
+    0.7481111111111111
+  ],
+  "train_dt": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "K": [
+    8,
+    8,
+    8
+  ],
+  "M": [
+    4,
+    4,
+    4
+  ],
+  "n_samples": [
+    479,
+    479,
+    479
+  ]
+}
