@@ -1,15 +1,21 @@
 # -*- coding: utf-8 -*-
 """Fig 6: E4 efficiency. Box plots of per-step latency + c_min histogram."""
 
-import os, sys, numpy as np
+import os, sys, numpy as np, json
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.dirname(HERE); ROOT = os.path.dirname(SRC)
 sys.path.insert(0, SRC)
+sys.path.insert(0, "/root/.zcode/skills/nature-figure/scripts")
+from audit_panel_alignment import require_matplotlib_panel_alignment
 from config import RESULTS_DIR
-from visual.palette import set_paper_style, PALETTE, method_color
+from matplotlib.ticker import FuncFormatter
+
+def _plain_log(v, pos=None):
+    return ('%g' % v) if v >= 0.1 else ('%.2f' % v)
+from visual.palette import set_paper_style, PALETTE, method_color, save_figure
 
 set_paper_style()
 OUT_DIR = os.path.join(ROOT, "latex", "figure")
@@ -27,7 +33,7 @@ def main():
     if not os.path.exists(INPUT_NPZ):
         fig, ax = plt.subplots(figsize=(7.16, 3.0))
         ax.text(0.5, 0.5, "TBD - waiting for E4 data",
-                ha='center', va='center', fontsize=11)
+                ha='center', va='center', fontsize=17)
         ax.axis('off')
         for ext in ('.pdf', '.tiff'):
             fig.savefig(os.path.join(OUT_DIR, f"fig_e4_efficiency{ext}"),
@@ -53,40 +59,57 @@ def main():
     for median_line in bp['medians']:
         median_line.set_color('black'); median_line.set_linewidth(1.2)
     for mean_point in bp['means']:
-        mean_point.set_marker('D'); mean_point.set_markerfacecolor('red')
+        mean_point.set_marker('D'); mean_point.set_markerfacecolor(PALETTE['secondary'])
         mean_point.set_markersize(3)
-    axes[0].set_xticklabels(modes, fontsize=7)
-    axes[0].set_ylabel('Per-step latency (ms)', fontsize=8)
+    axes[0].set_xticklabels(modes, fontsize=13)
+    axes[0].set_ylabel('Per-step latency (ms)', fontsize=14)
     axes[0].set_yscale('log')
+    axes[0].yaxis.set_major_formatter(FuncFormatter(_plain_log))
     axes[0].grid(True, axis='y', alpha=0.3)
-    axes[0].tick_params(labelsize=7)
+    axes[0].tick_params(labelsize=13)
     axes[0].set_title('(a) Latency distribution (ms)', pad=10,
-                          fontsize=9, weight='bold')
+                          fontsize=15, weight='bold')
 
     # panel (b): c_min histogram
+    hist_patches = []
     for m in modes:
         key = f"{m}__conf_min"
         if key in npz.files:
             arr = npz[key]
-            axes[1].hist(arr, bins=30, alpha=0.55,
+            _, _, patches = axes[1].hist(arr, bins=30, alpha=0.55,
                          color=MODE_COLORS.get(m, PALETTE['neutral_med']),
                          label=m, edgecolor='black', linewidth=0.3)
-    axes[1].axvline(0.3, color=PALETTE['sac'], linestyle='--',
+            hist_patches.append(patches[0])
+    vline = axes[1].axvline(0.3, color=PALETTE['sac'], linestyle='--',
                      linewidth=0.8, label=r'$\tau_{\text{low}}=0.3$')
-    axes[1].set_xlabel(r'Confidence $c_{\min}$', fontsize=8)
-    axes[1].set_ylabel('Count', fontsize=8)
-    axes[1].legend(fontsize=7, frameon=False)
-    axes[1].tick_params(labelsize=7)
+    axes[1].set_xlabel(r'Confidence $c_{\min}$', fontsize=14)
+    axes[1].set_ylabel('Count', fontsize=14)
+    axes[1].tick_params(labelsize=13)
     axes[1].grid(True, alpha=0.3)
     axes[1].set_title(r'(b) Confidence $c_{\min}$', pad=10,
-                          fontsize=9, weight='bold')
+                          fontsize=15, weight='bold')
 
+    # 图例移出绘图区: 图内图例 (loc='best') 位于 (b) 直方图顶部, 网格线与
+    # tau 阈值虚线从其文字下穿过 (碰撞审计 text-stroke FAIL)。改为 figure
+    # 级图例, 置于两子图下方空白居中。
     plt.tight_layout()
-    fig.savefig(os.path.join(OUT_DIR, "fig_e4_efficiency.pdf"),
-                format="pdf", dpi=PDF_DPI, bbox_inches='tight')
-    fig.savefig(os.path.join(OUT_DIR, "fig_e4_efficiency.tiff"),
-                format="tiff", dpi=TIFF_DPI, bbox_inches='tight',
-                pil_kwargs={"compression": "tiff_lzw"})
+    handles = hist_patches + [vline]
+    fig.legend(handles, [h.get_label() for h in handles],
+               loc='upper center', bbox_to_anchor=(0.5, -0.06),
+               ncol=4, fontsize=12, frameon=False, columnspacing=1.8,
+               handlelength=1.6, handletextpad=0.6, borderaxespad=0.1)
+    save_figure(fig, "fig_e4_efficiency", OUT_DIR)
+    require_matplotlib_panel_alignment(
+        fig,
+        json_out=os.path.join(OUT_DIR, "fig_e4_efficiency.alignment.json"),
+        overlay_svg=os.path.join(OUT_DIR, "fig_e4_efficiency.alignment.svg"),
+        tolerance_pt=1.5, gutter_tolerance_pt=1.5, strict=True,
+    )
+    from audit_panel_alignment import matplotlib_layout_manifest
+    manifest = matplotlib_layout_manifest(fig)
+    with open(os.path.join(OUT_DIR, "fig_e4_efficiency.layout.json"), "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh, indent=2)
+    save_figure(fig, "fig_e4_efficiency", OUT_DIR)
     print("  saved: fig_e4_efficiency.pdf/.tiff")
 
 
