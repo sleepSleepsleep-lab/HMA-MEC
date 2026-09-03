@@ -40,6 +40,7 @@ from distill_agent import (
 )
 from agent_runner import HMAAgentRunner
 from local.experiment_common import compose_action
+from local.results_store import Recorder
 
 
 # ============================================================
@@ -50,8 +51,8 @@ EPOCHS  = int(os.environ.get("E8_EPOCHS", 30))     # 训练 epoch 数 (GPU 上�
 BATCH   = int(os.environ.get("E8_BATCH",   128))
 VAL_RATIO = 0.1
 
-N_SEEDS    = 2
-N_EPISODES = 3
+N_SEEDS    = 5
+N_EPISODES = 2
 N_STEPS    = 100
 
 DEBATE_DATASET = os.path.join(RESULTS_DIR, "debate_dataset.jsonl")
@@ -70,7 +71,7 @@ def train_and_eval_size(N, n_seeds=N_SEEDS, n_episodes=N_EPISODES,
     if not os.path.exists(DEBATE_DATASET):
         print(f"  [warn] debate_dataset.jsonl 不存在, 跳过")
         return None, None
-    states, alphas, servers, clouds, confs = load_debate_dataset(
+    states, alphas, servers, confs = load_debate_dataset(
         DEBATE_DATASET, max_samples=N,
         target_K=NUM_USERS, target_M=NUM_EDGE_SERVERS)
     if states is None or len(states) < N // 5:
@@ -93,8 +94,6 @@ def train_and_eval_size(N, n_seeds=N_SEEDS, n_episodes=N_EPISODES,
         servers = servers[idx]
         if confs is not None:
             confs = confs[idx]
-        if clouds is not None:
-            clouds = clouds[idx]
     print(f"  - actual samples used: {len(states)}")
     save_path = OUT_CKPT_PREFIX.format(N=N)
     trainer = DistillAgentTrainer(
@@ -103,14 +102,16 @@ def train_and_eval_size(N, n_seeds=N_SEEDS, n_episodes=N_EPISODES,
         lr=1e-3, epochs=EPOCHS, batch=BATCH,
         save_path=save_path)
     t0 = time.time()
-    trainer.train(states, alphas, servers, clouds=clouds, confidences=confs,
+    trainer.train(states, alphas, servers, confidences=confs,
                   val_ratio=VAL_RATIO)
     train_dt = time.time() - t0
     print(f"  - train done in {train_dt:.1f}s")
     # 评估（沿用与该数据规模匹配的 env）
     energy, lat, suc, sla = [], [], [], []
+    rec = Recorder("e8", config={"N": N, "epochs": EPOCHS, "batch": BATCH})
     for sd in range(n_seeds):
         for ep in range(n_episodes):
+            _i0 = len(energy)
             env = MECEnvironment(num_users=K_data,
                                   num_servers=M_data,
                                   seed=SEED + sd + ep)
@@ -127,6 +128,12 @@ def train_and_eval_size(N, n_seeds=N_SEEDS, n_episodes=N_EPISODES,
                 suc.append(info['success_rate'])
                 sla.append(info['priority_sla'])
                 if d: break
+            rec.add(method="D{}".format(N), seed=sd, episode=ep,
+                    metrics={"energy": float(np.mean(energy[_i0:])),
+                             "latency": float(np.mean(lat[_i0:])),
+                             "success_rate": float(np.mean(suc[_i0:])),
+                             "priority_sla": float(np.mean(sla[_i0:]))})
+    rec.close()
     return {
         'energy':   float(np.mean(energy)),
         'latency':  float(np.mean(lat)),
