@@ -30,7 +30,9 @@ from local.experiment_common import compose_action
 N_EPISODES = 3
 N_STEPS    = MAX_STEPS          # 每 episode 步数
 WARMUP_STEPS = 20              # 每个模式跑前先 warmup，防止初始化/缓存效应污染均值
-MODES = ["Distill", "Hybrid"]   # FullLLM 仅作上限参考, 默认省略
+MODES = ["Distill", "Hybrid", "FullLLM"]   # D4 整改: FullLLM 加入实测(原默认省略)
+FULLLLM_N_EPISODES = 1          # FullLLM 慢，用 1 ep
+FULLLLM_N_STEPS    = 10         # 10 步已够统计（约 400 次 LLM 调用）
 POLICY_PATH = os.path.join(CHECKPOINT_DIR, "distilled_policy.pth")
 OUTPUT_NPZ  = os.path.join(RESULTS_DIR, "e4_efficiency.npz")
 OUTPUT_JSON = os.path.join(RESULTS_DIR, "e4_efficiency.json")
@@ -46,13 +48,24 @@ def run_one_mode(mode, n_episodes=N_EPISODES, n_steps=N_STEPS):
     env = MECEnvironment(num_users=NUM_USERS, num_servers=NUM_EDGE_SERVERS,
                          seed=SEED)
     env.reset()
-    runner = HMAAgentRunner(env=env, mode=mode, policy_path=POLICY_PATH,
-                            agents=None)
+    if mode == "FullLLM":
+        # D4 整改: FullLLM 需要真实 LLM 客户端, 无需蒸馏权重
+        from llm_client import get_llm_client
+        llm = get_llm_client()
+        runner = HMAAgentRunner(env=env, mode="FullLLM", llm=llm,
+                                agents=None, verbose=False)
+        n_episodes = FULLLLM_N_EPISODES
+        n_steps = FULLLLM_N_STEPS
+        warmup_steps = 0           # FullLLM 每步都是 LLM 调用, 跳过 warmup
+    else:
+        runner = HMAAgentRunner(env=env, mode=mode, policy_path=POLICY_PATH,
+                                agents=None)
+        warmup_steps = WARMUP_STEPS
     lat_total, lat_infer, confs, fallbacks = [], [], [], []
     for ep in range(n_episodes):
         env.reset()
         # ---- warmup 阶段：不计时 ----
-        for _ in range(WARMUP_STEPS):
+        for _ in range(warmup_steps):
             state = env._get_state()
             t0 = time.time()
             out = runner.run_step(state=state, agents_reuse=True)
