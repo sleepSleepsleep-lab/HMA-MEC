@@ -55,12 +55,16 @@ from config import (
 # ============================================================
 
 # 每模型预设的对比样本数（主力模型 5000，其余 1000）
+# 2026-08 整改: 注册表已更新为 Qwen2.5-7B/Llama-3.1-8B/Mistral-7B/Qwen2.5-3B,
+# 原 Qwen3.6-27B/Qwen3.5-9B 键已废弃; 主力 Qwen2.5-7B 与 D1 声明一致取 5000。
 N_SAMPLES = {
-    "Qwen3.6-27B":  5000,
-    "Qwen3.5-9B":   1000,
+    "Qwen2.5-7B":   5000,
     "Llama-3.1-8B": 1000,
     "Mistral-7B":   1000,
 }
+
+# E9 跳过不在论文范围的模型（Qwen2.5-3B 为树莓派 E11 部署用，D1 仅需 3 模型）
+SKIP_MODELS = {"Qwen2.5-3B"}
 
 # 蒸馏训练参数 (每模型)
 TRAIN_EPOCHS = 100
@@ -106,6 +110,9 @@ def phase_gen(skip_existing=True):
         return
 
     for model_name, info in LLM_MODEL_REGISTRY.items():
+        if model_name in SKIP_MODELS:
+            print(f"[E9] 跳过 {model_name}: 不在论文范围 (SKIP_MODELS)")
+            continue
         port = info["port"]
         out_path = debate_data_path(model_name)
         n_target = N_SAMPLES.get(model_name, 1000)
@@ -180,8 +187,8 @@ def phase_train():
         print(f"[E9] 错误: 未找到 {train_script}")
         return
 
-    # 包含随机基线
-    all_models = list(LLM_MODEL_REGISTRY.keys()) + ["Random"]
+    # 包含随机基线（过滤 SKIP_MODELS 中的模型）
+    all_models = [m for m in LLM_MODEL_REGISTRY if m not in SKIP_MODELS] + ["Random"]
 
     for model_name in all_models:
         if model_name in LLM_MODEL_REGISTRY:
@@ -242,8 +249,8 @@ def phase_eval():
     K, M = NUM_USERS, NUM_EDGE_SERVERS
     results = {}
 
-    # ----- 评估每个模型的蒸馏策略 -----
-    all_models = list(LLM_MODEL_REGISTRY.keys()) + ["Random"]
+    # ----- 评估每个模型的蒸馏策略（过滤 SKIP_MODELS）-----
+    all_models = [m for m in LLM_MODEL_REGISTRY if m not in SKIP_MODELS] + ["Random"]
     for model_name in all_models:
         if model_name in LLM_MODEL_REGISTRY:
             ckpt = checkpoint_path(model_name)
@@ -262,7 +269,7 @@ def phase_eval():
             out = run_multi_episodes(
                 method_specs, K=K, M=M,
                 n_seeds=EVAL_SEEDS, n_episodes=EVAL_EPISODES,
-                n_steps=EVAL_STEPS)
+                n_steps=EVAL_STEPS, record_experiment="e9")
             results[label] = {
                 "mean": out.get("HMA-Distill", {}).get("mean", {}),
                 "std":  out.get("HMA-Distill", {}).get("std", {}),
