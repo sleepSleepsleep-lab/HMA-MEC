@@ -37,9 +37,9 @@ from agent_define import make_agents
 from llm_client import get_llm_client
 
 # 显眼配置区
-OMEGAS = np.linspace(0.0, 1.0, 3)    # 3 个 ω 点 (0, 0.5, 1)
-N_EPISODES = 1                        # 每 ω 下 episode 数
-N_STEPS = 10                          # 每 episode 步数 (缩减以控制时间)
+OMEGAS = np.linspace(0.0, 1.0, 5)    # 5 个 ω 点 (0, 0.25, 0.5, 0.75, 1)
+N_EPISODES = 2                        # 每 ω 下 episode 数
+N_STEPS = 30                          # 每 episode 步数 (C8: 20→30, Pareto 曲线更稳)
 POLICY_PATH = os.path.join(CHECKPOINT_DIR, "distilled_policy.pth")
 OUTPUT_NPZ = os.path.join(RESULTS_DIR, "e5_pareto.npz")
 OUTPUT_JSON = os.path.join(RESULTS_DIR, "e5_pareto.json")
@@ -64,9 +64,11 @@ def main():
         using_llm = False
 
     E_HMA, T_HMA = [], []
+    CONF_HMA, FALLBACK_HMA = [], []
     for w_e in OMEGAS:
         omega = np.array([w_e, 1.0 - w_e], dtype=np.float32)
         e_sum, t_sum = 0.0, 0.0
+        confs, fallbacks = [], []
         n_total = 0
 
         for ep in range(N_EPISODES):
@@ -85,6 +87,8 @@ def main():
                                         verbose=False)
                 out = runner.run_step(state=env._get_state(),
                                       agents_reuse=False)
+                confs.append(float(out.get('conf_min', 0.0)))
+                fallbacks.append(int(out.get('fallback_triggered', False)))
                 a = compose_action(out['plan'], env.K, env.M)
                 ns, _, d, info = env.step(a)
                 e_sum += info['energy']
@@ -101,19 +105,26 @@ def main():
         avg_t = t_sum / max(n_total, 1)
         E_HMA.append(avg_e)
         T_HMA.append(avg_t)
-        print(f"  => ω_e={w_e:.2f}  E={avg_e:.5f}  T={avg_t:.3f}")
+        CONF_HMA.append(float(np.mean(confs)) if confs else 0.0)
+        FALLBACK_HMA.append(float(np.mean(fallbacks)) if fallbacks else 0.0)
+        print(f"  => ω_e={w_e:.2f}  E={avg_e:.5f}  T={avg_t:.3f}  "
+              f"conf_min={CONF_HMA[-1]:.3f}  fb={FALLBACK_HMA[-1]:.3f}")
 
     # 保存
     flat = {
         "HMA__omegas": OMEGAS.astype(np.float32),
         "HMA__energy": np.array(E_HMA, dtype=np.float32),
         "HMA__latency": np.array(T_HMA, dtype=np.float32),
+        "HMA__conf_min": np.array(CONF_HMA, dtype=np.float32),
+        "HMA__fallback_rate": np.array(FALLBACK_HMA, dtype=np.float32),
     }
     os.makedirs(os.path.dirname(OUTPUT_NPZ), exist_ok=True)
     np.savez_compressed(OUTPUT_NPZ, **flat)
     with open(OUTPUT_JSON, "w", encoding="utf-8") as f:
         json.dump({"HMA": {"omegas": OMEGAS.tolist(),
-                            "energy": E_HMA, "latency": T_HMA}},
+                            "energy": E_HMA, "latency": T_HMA,
+                            "conf_min": CONF_HMA,
+                            "fallback_rate": FALLBACK_HMA}},
                    f, ensure_ascii=False, indent=2)
     print(f"\n  npz 保存: {OUTPUT_NPZ}")
     print("=" * 60)
