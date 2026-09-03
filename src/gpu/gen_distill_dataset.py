@@ -99,10 +99,10 @@ PRINT_EVERY = 100
 PROGRESS_DUMP_EVERY = 500
 
 # ---- 新增: 并行配置 ----
-# local_transformers 后端共享单模型 + 锁，实际为串行推理，
-# N_WORKERS 主要作用是线程池管理，不影响实际并发。
-# 建议 N_WORKERS=8~32，模型推理由全局锁串行化。
-N_WORKERS = 32
+N_WORKERS = 500           # 并行 worker 数; 受 llm_client 全局 2500 RPM 限流
+                          # 超过速率限制的线程由滑动窗口 RateLimiter 自动排队 sleep,
+                          # 不会触发 DeepSeek 429 错误。N_WORKERS 增大能消除单次慢响应
+                          # 的拖尾效应, 使总体吞吐稳定在 2500 RPM。建议 200~400。
 WRITE_LOCK = threading.Lock()   # 写入 jsonl 时的互斥锁
 
 # 模型名 (可选覆盖 config.LLM_MODEL)
@@ -194,7 +194,6 @@ def generate_one_sample(task_idx, fp_log_path, model_override=None,
     try:
         out = cw_debate(env, agents, mode="FullLLM", llm=llm, verbose=False)
         alpha = out['plan']['alpha']; server = out['plan']['server']
-        cloud = out['plan'].get('cloud', np.zeros(K, dtype=bool))
         confidences = (np.asarray(out['confidence_history'][-1])
                        if out['confidence_history'] else
                        np.zeros(K, dtype=np.float32))
@@ -203,7 +202,6 @@ def generate_one_sample(task_idx, fp_log_path, model_override=None,
                                      dtype=np.float32).tolist(),
             'alpha':      np.asarray(alpha, dtype=np.float32).tolist(),
             'server':     np.asarray(server, dtype=int).tolist(),
-            'cloud':      np.asarray(cloud, dtype=int).tolist(),
             'confidence': (np.asarray(confidences,
                                      dtype=np.float32).tolist()),
             'fingerprint': fingerprint,
@@ -296,7 +294,7 @@ def smoke_test():
     TARGET_SAMPLES = base_done + 3
     PRINT_EVERY = 1
     PROGRESS_DUMP_EVERY = 1
-    N_WORKERS = 4  # smoke 用小 worker 数
+    N_WORKERS = 3  # smoke 用小 worker 数
     print("=" * 60)
     print("  小规模试跑 3 个样本, 验证并行流水线")
     print("=" * 60)
