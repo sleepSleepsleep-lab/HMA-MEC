@@ -1,13 +1,16 @@
 """Fig: Distill-Agent training history (loss curves)."""
 
-import os, sys, numpy as np
+import os, sys, json, numpy as np
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.dirname(HERE); ROOT = os.path.dirname(SRC)
 sys.path.insert(0, SRC)
+sys.path.insert(0, "/root/.zcode/skills/nature-figure/scripts")
 from visual.palette import set_paper_style, PALETTE
+from audit_panel_alignment import (require_matplotlib_panel_alignment,
+                                   matplotlib_layout_manifest)
 
 set_paper_style()
 OUT_DIR = os.path.join(ROOT, "latex", "figure")
@@ -22,7 +25,7 @@ def main():
     if not os.path.exists(HIST_PATH):
         fig, ax = plt.subplots(figsize=(7.16, 3.5))
         ax.text(0.5, 0.5, "TBD - run train_and_save_history.py first",
-                ha='center', va='center', fontsize=11)
+                ha='center', va='center', fontsize=17)
         ax.axis('off')
         fig.savefig(os.path.join(OUT_DIR, "fig_train_history.pdf"),
                     format="pdf", dpi=PDF_DPI, bbox_inches='tight')
@@ -41,21 +44,26 @@ def main():
     best_idx = int(np.argmin(lv))
     best_ep = int(epochs[best_idx])
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7.16, 3.2))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7.16, 3.5))
 
-    # Left subplot: training losses
-    ax1.plot(epochs, la, '-', color=PALETTE['hma_primary'],
+    # Left subplot: training losses (P1-8: distinct markers so lines are
+    # separable in grayscale; markevery thins markers on dense curves)
+    ax1.plot(epochs, la, '-', marker='o', ms=3, markevery=4,
+             color=PALETTE['hma_primary'],
              linewidth=1.3, label=r'$\mathcal{L}_\alpha$ (Laplace NLL)')
-    ax1.plot(epochs, ls, '-', color=PALETTE['sac'],
+    ax1.plot(epochs, ls, '-', marker='s', ms=3, markevery=4,
+             color=PALETTE['sac'],
              linewidth=1.3, label=r'$\lambda_s \mathcal{L}_s$ (server CE)')
-    ax1.plot(epochs, lc, '-', color=PALETTE['hma_hybrid'],
+    ax1.plot(epochs, lc, '-', marker='^', ms=3, markevery=4,
+             color=PALETTE['hma_hybrid'],
              linewidth=1.3, label=r'$\lambda_c \mathcal{L}_c$ (conf MSE)')
-    ax1.set_xlabel('Epoch', fontsize=8)
-    ax1.set_ylabel('Loss', fontsize=8)
-    ax1.tick_params(labelsize=7)
+    ax1.set_xlabel('Epoch', fontsize=13)
+    ax1.set_ylabel('Loss', fontsize=13)
+    ax1.tick_params(labelsize=12)
     ax1.grid(True, alpha=0.3)
-    ax1.legend(fontsize=7, frameon=False)
-    ax1.set_title('(a) Training loss components', pad=8, fontsize=9, weight='bold')
+    ax1.grid(False, axis='x')
+    ax1.set_title('(a) Training loss components', pad=9, fontsize=13,
+                  weight='bold')
 
     # Right subplot: validation loss
     ax2.plot(epochs, lv, '-', color=PALETTE['hma_primary'],
@@ -67,14 +75,37 @@ def main():
     ax2.scatter([best_ep], [lv[best_idx]], color=PALETTE['sac'],
                 s=40, zorder=5, marker='D', edgecolors='black',
                 linewidths=0.5)
-    ax2.set_xlabel('Epoch', fontsize=8)
-    ax2.set_ylabel('Validation loss', fontsize=8)
-    ax2.tick_params(labelsize=7)
+    ax2.set_xlabel('Epoch', fontsize=13)
+    ax2.set_ylabel('Validation loss', fontsize=13)
+    ax2.tick_params(labelsize=12)
     ax2.grid(True, alpha=0.3)
-    ax2.legend(fontsize=7, frameon=False)
-    ax2.set_title('(b) Validation loss', pad=8, fontsize=9, weight='bold')
+    ax2.grid(False, axis='x')
+    ax2.set_title('(b) Validation loss', pad=9, fontsize=13, weight='bold')
 
     plt.tight_layout()
+
+    # Shared legend under both panels, out of the way of every curve/gridline.
+    handles, labels = ax1.get_legend_handles_labels()
+    h2, l2 = ax2.get_legend_handles_labels()
+    handles += h2          # validation-loss line + dashed best-epoch marker
+    labels += l2
+    fig.legend(handles, labels, loc='upper center',
+               bbox_to_anchor=(0.5, -0.085), ncol=3, fontsize=11.5,
+               frameon=False, columnspacing=1.6, handlelength=1.7,
+               handleheight=1.0)
+
+    # Multi-panel alignment gate (measured on the final rendered layout).
+    require_matplotlib_panel_alignment(
+        fig,
+        json_out=os.path.join(OUT_DIR, "fig_train_history.alignment.json"),
+        overlay_svg=os.path.join(OUT_DIR, "fig_train_history.alignment.svg"),
+        tolerance_pt=1.5, gutter_tolerance_pt=1.5, strict=True,
+    )
+    manifest = matplotlib_layout_manifest(fig)
+    with open(os.path.join(OUT_DIR, "fig_train_history.layout.json"),
+              "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh, indent=2)
+
     fig.savefig(os.path.join(OUT_DIR, "fig_train_history.pdf"),
                 format="pdf", dpi=PDF_DPI, bbox_inches='tight')
     fig.savefig(os.path.join(OUT_DIR, "fig_train_history.tiff"),
