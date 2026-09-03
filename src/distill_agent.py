@@ -27,7 +27,6 @@ CW-Debate) 与大规模训练 (batch ≥ 256, EPOCH ≥ 100) 应在 GPU 服务�
 """
 
 import os
-import sys
 import json
 import time
 import logging
@@ -66,17 +65,15 @@ class PolicyAgentNet(nn.Module if torch else object):
     """蒸馏策略网络。
 
     架构：
-        state_dim -> 256 -> 256 -> 五路输出头
-        Head A: alpha_mean(k)  ∈ (0,1)        (K 头)
+        4K+2M -> 256 -> 256 -> 三路输出头
+        Head A: alpha_mean(k)  ∈ (0,1)        (Ka 头)
         Head B: alpha_logstd(k) clamped       (K 头)
         Head C: server_logits(k, m)           (K × M)
-        Head D: cloud_logits(k, 2)            (K × 2, 新增云端选择)
-        Head E: confidence_min  ∈ [0, 1]      (单值, Hybrid 模式用)
+        Head D: confidence_min  ∈ [0, 1]      (单值, Hybrid 模式用)
 
     损失:  Laplace NLL on alpha (回归 to a^star)
            + CrossEntropy on server  (分类 to m^star)
-           + CrossEntropy on cloud   (分类 to cloud^star, 新增)
-           + MSE on confidence estimate vs 真实置信度
+           + MSE on confidence estimate vs (slack 归一化的) 真实置信度
     """
 
     def __init__(self, K: int = NUM_USERS, M: int = NUM_EDGE_SERVERS,
@@ -99,9 +96,7 @@ class PolicyAgentNet(nn.Module if torch else object):
         self.alpha_logstd = nn.Linear(hidden, K)
         # 头 C: 每用户服务器选择的 logits (K*M)
         self.server_logits = nn.Linear(hidden, K * M)
-        # 头 D: 每用户云端选择 logits (K*2), 0=边缘 1=云端
-        self.cloud_logits = nn.Linear(hidden, K * 2)
-        # 头 E: 自评最小置信度 (1)
+        # 头 D: 自评最小置信度 (1)
         self.confidence_head = nn.Sequential(
             nn.Linear(hidden, hidden // 2), nn.LeakyReLU(0.2),
             nn.Linear(hidden // 2, 1), nn.Sigmoid(),
@@ -122,8 +117,7 @@ class PolicyAgentNet(nn.Module if torch else object):
         返回:
             alpha_mean:   (B, K) ∈ (0,1)
             alpha_std:    (B, K) ∈ (0, +∞)
-            server_logits: (B, K, M)
-            cloud_logits:  (B, K, 2)
+            server_logits: (B, K*M)
             conf_min:     (B,) ∈ (0,1)
         """
         h = self.shared(state)
@@ -131,31 +125,30 @@ class PolicyAgentNet(nn.Module if torch else object):
         log_std = torch.clamp(self.alpha_logstd(h), -5.0, 2.0)
         alpha_std = log_std.exp()
         server_logits = self.server_logits(h).view(-1, self.K, self.M)
-        cloud_logits = self.cloud_logits(h).view(-1, self.K, 2)
         conf_min = self.confidence_head(h).squeeze(-1)
-        return alpha_mean, alpha_std, server_logits, cloud_logits, conf_min
+        return alpha_mean, alpha_std, server_logits, conf_min
 
     def sample_action(self, state,
                       deterministic: bool = False
-                      ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+                      ) -> Tuple[np.ndarray, np.ndarray, float]:
         """从策略网络采样动作。
 
         参数:
             state:          np.ndarray (state_dim,)
-            deterministic:  True 时取 alpha 的众数与 argmax，用于评估
+            deterministic:  True 时取 alpha 的众数与 argmax(m)，用于评估
         返回:
             alpha:          (K,) float32 ∈ [0.01, 1.0]
             server:         (K,) int ∈ [0, M-1]
-            cloud:          (K,) bool
             conf_min:       float, 对当前状态的最小置信度估计
         """
         s_t = torch.from_numpy(state.astype(np.float32)).unsqueeze(0).to(DEVICE)
         with torch.no_grad():
-            a_mean, a_std, s_logits, c_logits, conf = self.forward(s_t)
+            a_mean, a_std, s_logits, conf = self.forward(s_t)
         if deterministic:
             alpha = a_mean.squeeze(0)
             conf_min = float(conf.squeeze().item())
         else:
+            # Beta 分布采样; alpha_mean 视作 Beta(a,a) 的 mean,让方差 适中
             eps = 1e-4
             m = torch.clamp(a_mean.squeeze(0), eps, 1 - eps)
             kappa = 1.0 / (a_std.squeeze(0) ** 2 + eps) - 1
@@ -166,10 +159,10 @@ class PolicyAgentNet(nn.Module if torch else object):
             alpha = dist.sample()
             conf_min = float(conf.squeeze().item())
         server = s_logits.squeeze(0).argmax(dim=-1).cpu().numpy().astype(int)
-        cloud = c_logits.squeeze(0).argmax(dim=-1).cpu().numpy().astype(bool)
         alpha = alpha.cpu().numpy().astype(np.float32)
+        # 软剪裁到 [0.01, 1.0]
         alpha = np.clip(alpha, 0.01, 1.0)
-        return alpha, server, cloud, conf_min
+        return alpha, server, conf_min
 
 
 # ============================================================
@@ -177,7 +170,6 @@ class PolicyAgentNet(nn.Module if torch else object):
 # ============================================================
 def save_debate_record(log_path: str, state: np.ndarray,
                        alpha: np.ndarray, server: np.ndarray,
-                       cloud: Optional[np.ndarray] = None,
                        confidence: Optional[np.ndarray] = None,
                        fingerprint: Optional[str] = None):
     """追加一条蒸馏样本 (jsonl 格式),便于断点续存。"""
@@ -185,8 +177,6 @@ def save_debate_record(log_path: str, state: np.ndarray,
         'state':      np.asarray(state, dtype=np.float32).tolist(),
         'alpha':      np.asarray(alpha, dtype=np.float32).tolist(),
         'server':     np.asarray(server, dtype=int).tolist(),
-        'cloud':      (np.asarray(cloud, dtype=int).tolist()
-                       if cloud is not None else None),
         'confidence': (np.asarray(confidence, dtype=np.float32).tolist()
                        if confidence is not None else None),
         'fingerprint': fingerprint or '',
@@ -201,7 +191,7 @@ def load_debate_dataset(log_path: str,
                         target_K: Optional[int] = None,
                         target_M: Optional[int] = None
                         ) -> Tuple[np.ndarray, np.ndarray, np.ndarray,
-                                   Optional[np.ndarray], Optional[np.ndarray]]:
+                                   Optional[np.ndarray]]:
     """读取蒸馏数据集, 支持按 (K, M) 配置筛选.
 
     参数:
@@ -209,16 +199,15 @@ def load_debate_dataset(log_path: str,
         max_samples:  最大样本数 (None 表示全部)
         target_K:     目标用户数, 仅保留该配置的样本
         target_M:     目标服务器数, 与 target_K 配合使用
-    返回: (states, alphas, servers, clouds, confidences)
+    返回: (states, alphas, servers, confidences)
         states shape (N, state_dim)  -- float32
         alphas shape (N, K)           -- float32
         servers shape (N, K)          -- int
-        clouds shape (N, K) or None   -- int
         confidences shape (N, K) or None
     """
     if not os.path.exists(log_path):
-        return None, None, None, None, None
-    states, alphas, servers, clouds_list, confs = [], [], [], [], []
+        return None, None, None, None
+    states, alphas, servers, confs = [], [], [], []
     n_skipped = 0
 
     # 如果指定了 target_K 和 fingerprint 筛选, 优先使用正则
@@ -247,9 +236,6 @@ def load_debate_dataset(log_path: str,
             s = np.asarray(r['state'], dtype=np.float32)
             a = np.asarray(r['alpha'], dtype=np.float32)
             sv = np.asarray(r['server'], dtype=int)
-            cl = r.get('cloud')
-            if cl is not None:
-                cl = np.asarray(cl, dtype=int)
             cf = r.get('confidence')
             if cf is not None:
                 cf = np.asarray(cf, dtype=np.float32)
@@ -264,24 +250,28 @@ def load_debate_dataset(log_path: str,
                 n_skipped += 1
                 continue
             states.append(s); alphas.append(a); servers.append(sv)
-            if cl is not None:
-                clouds_list.append(cl)
             if cf is not None:
                 confs.append(cf)
     if not states:
-        return None, None, None, None, None
+        return None, None, None, None
     if max_samples is not None and len(states) > max_samples:
         # 均匀采样
         idx = np.linspace(0, len(states) - 1, max_samples).astype(int)
     else:
         idx = slice(None)
     confidences = np.stack(confs, axis=0) if confs else None
-    clouds_out = np.stack(clouds_list, axis=0) if clouds_list else None
-    return (np.stack(states, axis=0)[idx],
-            np.stack(alphas, axis=0)[idx],
-            np.stack(servers, axis=0)[idx],
-            (clouds_out[idx] if clouds_out is not None else None),
-            (confidences[idx] if confidences is not None else None))
+    states_a = np.stack(states, axis=0)[idx]
+    alphas_a = np.stack(alphas, axis=0)[idx]
+    servers_a = np.stack(servers, axis=0)[idx]
+    if confidences is not None:
+        confidences = confidences[idx]
+        # 清洗 NaN 置信度: 部分 LLM 后端可能输出缺失字段导致 NaN,
+        # 以非 NaN 中位数填充, 避免训练损失发散 (E9 Mistral 数据集观测)
+        bad = np.isnan(confidences)
+        if bad.any():
+            med = float(np.nanmedian(confidences)) if np.isfinite(np.nanmedian(confidences)) else 0.5
+            confidences = np.where(bad, med, confidences)
+    return states_a, alphas_a, servers_a, confidences
 
 
 def count_debate_records(log_path: str) -> int:
@@ -311,7 +301,7 @@ class DistillAgentTrainer:
     """
 
     def __init__(self, K=NUM_USERS, M=NUM_EDGE_SERVERS,
-                 state_dim=None,
+                 state_dim=STATE_DIM,
                  lr: float = POLICY_NET_LR,
                  epochs: int = POLICY_NET_EPOCHS,
                  batch: int = POLICY_NET_BATCH,
@@ -334,43 +324,41 @@ class DistillAgentTrainer:
         self.best_val: float = float('inf')
 
     def _loss(self, batch):
-        s, a_star, m_star, c_star, conf_gt = (
-            batch[0], batch[1], batch[2],
-            batch[3] if len(batch) > 3 else None,
-            batch[4] if len(batch) > 4 else None,
-        )
+        s, a_star, m_star, conf_gt = batch
         s = s.to(DEVICE)
         a_star = a_star.to(DEVICE)
         m_star = m_star.to(DEVICE).long().view(-1, self.K)
-        a_mean, a_std, s_logits, c_logits, conf_pred = self.model.forward(s)
+        a_mean, a_std, s_logits, conf_pred = self.model.forward(s)
         # --- alpha NLL (近似为 Laplace) ---
         eps = 1e-4
         a_mean_c = torch.clamp(a_mean, eps, 1 - eps)
         log_a_std = torch.log(a_std + eps)
+        # Laplace NLL: log_std + |a - mean| / std
         L_alpha = (log_a_std + torch.abs(a_star - a_mean_c) / (a_std + eps)).mean()
         # --- server CE ---
-        s_logits_v = s_logits.view(-1, self.M).float()
+        s_logits = s_logits.view(-1, self.M).float()
         m_target = m_star.view(-1)
-        L_server = F.cross_entropy(s_logits_v, m_target)
-        # --- cloud CE (新增) ---
-        if c_star is not None and c_star.numel() > 0:
-            c_star = c_star.to(DEVICE).long().view(-1)
-            L_cloud = F.cross_entropy(c_logits.view(-1, 2), c_star)
-        else:
-            L_cloud = torch.zeros((), device=DEVICE)
+        L_server = F.cross_entropy(s_logits, m_target)
         # --- conf MSE ---
         if conf_gt is not None and conf_gt.numel() > 0:
             conf_gt = conf_gt.to(DEVICE).float().view(-1, self.K)
-            conf_min_gt = conf_gt.min(dim=-1, keepdim=True)[0].view(-1)
+            # ---- M4: min → median（更鲁棒；可选分位数）----
+            # 原实现取全 K 用户置信度最小值，单个噪声偏低的 UA 会把 c_min
+            # 拉得过低（method.tex 已自述此问题）。改中位数后对离群样本更稳健。
+            use_quantile = False                       # True 时取 30% 分位数
+            if use_quantile:
+                sorted_conf, _ = conf_gt.sort(dim=-1)
+                q_idx = max(0, int(conf_gt.shape[-1] * 0.3))
+                conf_min_gt = sorted_conf[:, q_idx:q_idx + 1].view(-1)
+            else:
+                conf_min_gt = conf_gt.median(dim=-1, keepdim=True)[0].view(-1)
             L_conf = F.mse_loss(conf_pred, conf_min_gt)
         else:
             L_conf = torch.zeros((), device=DEVICE)
-        loss = L_alpha + self.lambda_server * L_server + 0.5 * L_cloud + self.lambda_conf * L_conf
-        return loss, (float(L_alpha.detach()), float(L_server.detach()),
-                       float(L_cloud.detach()), float(L_conf.detach()))
+        loss = L_alpha + self.lambda_server * L_server + self.lambda_conf * L_conf
+        return loss, (float(L_alpha.detach()), float(L_server.detach()), float(L_conf.detach()))
 
     def train(self, states, alphas, servers,
-              clouds: Optional[np.ndarray] = None,
               confidences: Optional[np.ndarray] = None,
               val_ratio: float = 0.1):
         """从头或断点续训。
@@ -379,7 +367,6 @@ class DistillAgentTrainer:
             states:      (N, state_dim)
             alphas:      (N, K)
             servers:     (N, K)
-            clouds:      (N, K) or None, 云端卸载标志
             confidences: (N, K) or None
             val_ratio:   验证集比例
         返回:
@@ -406,11 +393,6 @@ class DistillAgentTrainer:
         va_s = torch.from_numpy(states[val_idx]).float()
         va_a = torch.from_numpy(alphas[val_idx]).float()
         va_m = torch.from_numpy(servers[val_idx]).long()
-        if clouds is not None and clouds.shape[0] == N:
-            tr_cl = torch.from_numpy(clouds[train_idx]).long()
-            va_cl = torch.from_numpy(clouds[val_idx]).long()
-        else:
-            tr_cl, va_cl = None, None
         if confidences is not None and confidences.shape[0] == N:
             tr_c = torch.from_numpy(confidences[train_idx]).float()
             va_c = torch.from_numpy(confidences[val_idx]).float()
@@ -425,14 +407,13 @@ class DistillAgentTrainer:
         for epoch in range(self.epochs):
             self.model.train()
             perm = torch.randperm(n_tr)
-            total = [0.0, 0.0, 0.0, 0.0]
+            total = [0.0, 0.0, 0.0]
             for i in range(0, n_tr, self.batch):
                 bi = perm[i:i + self.batch]
                 # 数据增强: 状态向量附加高斯噪声（提升蒸馏鲁棒性, 弥补 5000 样本量）
                 noise = torch.randn_like(tr_s[bi]) * 0.015
                 s_noisy = (tr_s[bi] + noise).clamp(0.0, 1.0)
                 batch = (s_noisy, tr_a[bi], tr_m[bi],
-                         tr_cl[bi] if tr_cl is not None else None,
                          tr_c[bi] if tr_c is not None else None)
                 loss, parts = self._loss(batch)
                 self.optim.zero_grad()
@@ -444,9 +425,9 @@ class DistillAgentTrainer:
             # 验证
             self.model.eval()
             with torch.no_grad():
-                loss_val, _ = self._loss((va_s, va_a, va_m, va_cl, va_c))
-            self.history.append([epoch + 1, total[0], total[1],
-                                 total[2], total[3], float(loss_val)])
+                loss_val, _ = self._loss((va_s, va_a, va_m, va_c))
+            self.history.append([epoch + 1, total[0], total[1], total[2],
+                                 float(loss_val)])
             if loss_val < self.best_val:
                 self.best_val = float(loss_val)
                 self.best_epoch = epoch + 1
@@ -516,11 +497,10 @@ class PolicyAgentRunner:
     def infer(self, state: np.ndarray,
               deterministic: bool = True) -> Dict:
         """单次前向 -> 输出 plan 与 conf_min (Distill 模式专用)."""
-        alpha, server, cloud, conf_min = self.model.sample_action(
+        alpha, server, conf_min = self.model.sample_action(
             state, deterministic=deterministic)
-        plan = {'alpha': alpha, 'server': server, 'cloud': cloud}
         return {
-            'plan':       plan,
+            'plan':       {'alpha': alpha, 'server': server},
             'conf_min':   conf_min,
             'mode':       'Distill',
         }
@@ -549,7 +529,7 @@ if __name__ == "__main__":
     trainer = DistillAgentTrainer(K=K, M=M, epochs=5, batch=64,
                                   save_path=os.path.join(CHECKPOINT_DIR,
                                                        "smoke_policy.pth"))
-    trainer.train(states, alphas, servers, confidences=confs)
+    trainer.train(states, alphas, servers, confs)
     # 验证 PolicyAgentRunner
     runner = PolicyAgentRunner(model_path=trainer.save_path, K=K, M=M)
     s_test = np.random.uniform(0, 1, STATE_DIM).astype(np.float32)
