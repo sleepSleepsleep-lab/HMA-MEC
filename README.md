@@ -1,3 +1,5 @@
+> **迁移说明**：本仓库合并历史含旧骨架提交（README 一度为三层建模旧版描述）；发布主仓库为干净单提交的 https://github.com/sleepSleepsleep-lab/hma-mec-2026 ，论文引用请使用新地址。
+
 # HMA-MEC：面向移动边缘计算任务卸载的混合多智能体大模型框架
 
 > **Hybrid Multi-Agent framework with LLM for Mobile Edge Computing task offloading**
