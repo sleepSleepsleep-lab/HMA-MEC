@@ -29,16 +29,11 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from environment import compute_fbl_rate
 from config import (
     NUM_USERS, NUM_EDGE_SERVERS,
     CONFIDENCE_THRESHOLD, CONSENSUS_EPSILON, DEBATE_MAX_ROUNDS,
     VERIFY_MAX_FALLBACK,
-    FBL_ENABLED, FBL_BLOCKLENGTH, FBL_MAX_ERROR_PROB,
-    ENABLE_CLOUD_OFFLOAD, CLOUD_LATENCY_BASE, CLOUD_TRANSMISSION_FACTOR,
-    SCENE_TYPE,
 )
-from config import BANDWIDTH, NOISE_POWER, TX_POWER_USER
 from llm_client import get_llm_client, parse_json_response
 from verifier import VerifierAgentRunner
 from orchestrator import OrchestratorAgentRunner
@@ -162,12 +157,12 @@ class UserAgentRunner:
     def _heuristic_propose(self, env, k, t) -> Dict:
         """启发式提议：基于信道增益与时延约束选择服务器与本地比例。"""
         # 计算 alpha 使 max(local_time, off_time) <= tau
-        # 2026.08: 使用 FBL 速率替代 Shannon 理想速率
-        best = None
+        # 简单策略：在每服务器中选择 (1-alpha) 使 off_time 满足约束
+        best = None  # (T, alpha, server)
         for m in range(env.M):
             h = env.channels[k, m]
-            _, rate, _ = compute_fbl_rate(h, BANDWIDTH, TX_POWER_USER, NOISE_POWER,
-                                           FBL_BLOCKLENGTH, FBL_MAX_ERROR_PROB)
+            from environment import BANDWIDTH, NOISE_POWER, TX_POWER_USER
+            rate = BANDWIDTH * np.log2(1 + TX_POWER_USER * h / NOISE_POWER)
             tx_T_const = t['D'] / max(rate, 1e-9)
             comp_T_const = t['C'] / env.f_edge[m]
             # 假设 alpha -> ?, T = max(alpha*C/f_loc, (1-alpha)*(tx_T_const+comp_T_const))
@@ -199,19 +194,18 @@ class UserAgentRunner:
         #
         # 2026.07 修改：从一维 sigmoid(β·Δ_t) 扩展为三维，
         # 使置信度反映 MEC 特有的信道竞争与算力耦合特征。
-        from config import (CONFIDENCE_BETA_TAU, CONFIDENCE_BETA_SINR,
-                            CONFIDENCE_BETA_LOAD, CONFIDENCE_BETA_FBL)
+        from config import CONFIDENCE_BETA_TAU, CONFIDENCE_BETA_SINR, CONFIDENCE_BETA_LOAD
         delta_t = (t['tau'] - T) / max(t['tau'], 1e-3)
+        # 信道质量分量：使用用户 k 到所选服务器 m 的信道增益 h，
+        # 归一化到 [0,1] 区间
         h = env.channels[k, server] if hasattr(env, 'channels') else 0.5
         sinr_norm = float(np.clip(h / 1e-5, 0.0, 1.0))
+        # 服务器负载分量：基于当前该服务器上的累计任务量
         rho = float(env.server_load[server] / max(env.f_edge[server], 1e-9)) if hasattr(env, 'server_load') else 0.0
-        # FBL 传输可靠性分量：信道越差，解码错误概率越高
-        fbl_reliability = 1.0 - FBL_MAX_ERROR_PROB * (1.0 / max(sinr_norm, 0.05))
         conf = float(1.0 / (1.0 + np.exp(-(
             CONFIDENCE_BETA_TAU * delta_t
             + CONFIDENCE_BETA_SINR * sinr_norm
             + CONFIDENCE_BETA_LOAD * (1.0 - min(rho, 1.0))
-            + CONFIDENCE_BETA_FBL * fbl_reliability
         ))))
         return {'user': k, 'alpha': float(alpha), 'server': int(server),
                 'confidence': conf, 'reason': 'heuristic-propose'}
@@ -239,7 +233,7 @@ class UserAgentRunner:
             return {
                 'from_user': self.ua.k,
                 'server': my_s,
-                'critique': resp.get('critique', ''),
+                'critique': resp.get('critique', default=''),
                 'severity': resp.get('severity', 'low'),
             }
         except Exception as e:
@@ -247,11 +241,7 @@ class UserAgentRunner:
             return self._heuristic_critique(my_proposal, same)
 
     def _heuristic_critique(self, my_proposal, same) -> Dict:
-        """启发式批判：估算服务器聚合负载是否超过容量。
-
-        2026.08 新增：当所有边缘服务器均可能过载时，
-        建议低优先级任务卸载到云端。
-        """
+        """启发式批判：估算服务器聚合负载是否超过容量。"""
         env = self.ua.env
         s = my_proposal['server']
         total_cycles = 0.0
@@ -261,12 +251,11 @@ class UserAgentRunner:
         capacity = env.f_edge[s]
         severity = 'low' if total_cycles < capacity * 0.6 else (
                    'medium' if total_cycles < capacity * 1.0 else 'high')
-        note = (" (可考虑卸载至云端)" if ENABLE_CLOUD_OFFLOAD and severity == 'high' else "")
         return {
             'from_user': self.ua.k,
             'server': s,
             'critique': f"server_{s} 累计负载 {total_cycles:.2e} "
-                        f"(capacity {capacity:.2e}){note}",
+                        f"(capacity {capacity:.2e})",
             'severity': severity,
         }
 
@@ -314,11 +303,8 @@ class EdgeAgentRunner:
         capacity = env.f_edge[m]
         remain = max(0.0, capacity - total_cycles)
         accept = total_cycles <= capacity
-        overflow = max(0.0, total_cycles - capacity) if not accept else 0.0
-        reason = (f"累载 {total_cycles:.2e}, 容量 {capacity:.2e}"
-                  + (f", 溢出 {overflow:.2e} (建议云端)" if not accept and ENABLE_CLOUD_OFFLOAD else ""))
         return {'server': m, 'accept': accept, 'remaining': remain,
-                'reason': reason, 'overflow': overflow}
+                'reason': f"累载 {total_cycles:.2e}, 容量 {capacity:.2e}"}
 
 
 # ============================================================
@@ -329,7 +315,8 @@ def cw_debate(env, agents: Dict,
               llm=None,
               verbose: bool = False,
               fixed_preference: Optional[np.ndarray] = None,
-              flags: Optional[Dict] = None) -> Dict:
+              flags: Optional[Dict] = None,
+              process_feedback: bool = False) -> Dict:
     """执行一轮完整的 CW-Debate 协议，输出最终卸载方案。
 
     参数：
@@ -345,6 +332,10 @@ def cw_debate(env, agents: Dict,
                             disable_boundary, disable_priority, disable_pref,
                             disable_propose, disable_critique, disable_arbitrate,
                             disable_consensus
+        process_feedback: 可选, 开启后把每一轮合并方案的反事实仿真结果
+                          (能耗/时延/成功率/SLA 与 VA 判定) 追加到下一轮
+                          LLM 文本上下文, 使辩论基于客观仿真证据继续协商。
+                          默认 False, 保持原协议行为不变。
 
     返回：
         dict {
@@ -425,8 +416,35 @@ def cw_debate(env, agents: Dict,
     arb = {'revised': [], 'estimated_energy_kJ': 0.0, 'estimated_latency_s': 0.0}
 
     rounds_used = DEBATE_MAX_ROUNDS  # 默认设到上限，若提前终止会更新
+
+    # ---- 仿真反馈注入（process_feedback=True 时启用） ----
+    # 2026.08 新增：把每一轮经 VA 反事实仿真的合并方案结果追加到下一轮
+    # LLM 文本上下文，使辩论主体基于客观仿真证据继续协商。
+    fb_lines: List[str] = []
+
+    def _push_fb(r: int) -> None:
+        s = va_out.get('sim_result') or {}
+        if not s:
+            return
+        fb_lines.append(
+            f"Round {r + 1} merged-plan simulation: "
+            f"energy={s.get('energy', float('nan')):.3f} kJ, "
+            f"latency={s.get('latency', float('nan')):.3f} s, "
+            f"success_rate={s.get('success_rate', float('nan')):.1%}, "
+            f"SLA={s.get('priority_sla', float('nan')):.1%}; "
+            f"verdict={va_out.get('reason', '')}")
+
     for r in range(DEBATE_MAX_ROUNDS):
         rounds_used = r + 1
+
+        # 本轮 LLM 文本上下文：开启 feedback 时追加既往仿真证据
+        round_state_text = state_text
+        if process_feedback and fb_lines:
+            round_state_text = (
+                state_text +
+                "\n\n[Simulation feedback from previous negotiation rounds]\n" +
+                "\n".join(fb_lines) +
+                "\n[End of simulation feedback]")
 
         # ---- Round 1: 局部提议 ----
         proposals = {}
@@ -441,7 +459,7 @@ def cw_debate(env, agents: Dict,
                     'reason': 'random-propose (ablation)',
                 }
             else:
-                p = ur.propose(state, state_text)
+                p = ur.propose(state, round_state_text)
                 # 消融: disable_conf_gating —— 压低置信度使所有 UA 进入批判
                 if flags.get("disable_conf_gating") and not with_llm:
                     p['confidence'] = 0.4  # 低于默认阈值 0.6, 确保通过门控
@@ -487,7 +505,7 @@ def cw_debate(env, agents: Dict,
             ea_capacity = []
             for m, er in enumerate(ea_runners):
                 proposals_for_m = [p for p in propos_list if p['server'] == m]
-                cap = er.report_capacity(state, state_text, proposals_for_m)
+                cap = er.report_capacity(state, round_state_text, proposals_for_m)
                 ea_capacity.append(cap)
                 if not cap['accept']:
                     critiques.append({
@@ -503,7 +521,7 @@ def cw_debate(env, agents: Dict,
             # 跳过 ToM 预测
             cur_conf = np.full(K, 0.5, dtype=np.float32)
         else:
-            arb = oa_runner.arbitrate(proposals, critiques, state, state_text,
+            arb = oa_runner.arbitrate(proposals, critiques, state, round_state_text,
                                        flags=flags,
                                        fallback_count=fallback_count)
             revised = arb['revised']
@@ -512,7 +530,7 @@ def cw_debate(env, agents: Dict,
                 cur_conf = np.full(K, 0.5, dtype=np.float32)
             else:
                 cur_conf = oa_runner.predict_confidence_impact(
-                    revised, state, state_text, prev_conf=prev_conf)
+                    revised, state, round_state_text, prev_conf=prev_conf)
         confidence_history.append(list(cur_conf))
 
         # ---- Round 4: 验证 (反事实仿真 + 拒绝采样) ----
@@ -543,6 +561,8 @@ def cw_debate(env, agents: Dict,
                 print(f"[CW-Debate] Round {r+1} #{fallback_count}: "
                       f"{reject_reason}")
             prev_conf = cur_conf.copy()
+            if process_feedback:
+                _push_fb(r)
             continue
 
         # ---- Round 5: 共识终止 ----
@@ -550,12 +570,16 @@ def cw_debate(env, agents: Dict,
             if flags.get("disable_consensus"):
                 # 关闭共识: 强制跑满 R_max 轮
                 prev_conf = cur_conf
+                if process_feedback:
+                    _push_fb(r)
                 continue
             if oa_runner.consensus(prev_conf, cur_conf, r):
                 final_plan = plan
                 break
             else:
                 prev_conf = cur_conf
+                if process_feedback:
+                    _push_fb(r)
                 continue
         else:
             final_plan = plan
