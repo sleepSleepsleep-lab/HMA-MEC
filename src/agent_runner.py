@@ -32,6 +32,7 @@ from config import (
 from cw_debate import cw_debate
 from agent_define import make_agents
 from distill_agent import PolicyAgentRunner, PolicyAgentNet
+from local.plan_refiner import PlanRefiner
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,8 @@ class HMAAgentRunner:
                  llm=None, agents: Optional[Dict] = None,
                  tau_low: float = HYBRID_CONFIDENCE_LOW,
                  preference: Optional[np.ndarray] = None,
-                 verbose: bool = False):
+                 verbose: bool = False,
+                 use_refiner: bool = True):
         """
         参数:
             env:         MECEnvironment 实例
@@ -61,6 +63,9 @@ class HMAAgentRunner:
             agents:      已构造的多智能体集合; None 时由 make_agents 创建
             tau_low:     Hybrid 模式下, 蒸馏网 conf_min 低于该值即触发兜底
             preference:  可选, 固定 OA 偏好权重 [ω_e, ω_l], 仅 FullLLM 模式生效
+            use_refiner: 2026-08 新增: 是否启用反事实验证器计划精炼 (PlanRefiner),
+                         对策略/LLM 粗解做逐用户最优性精化 (GA 同款适应度,
+                         每步 ~10ms, 保持实时)。默认 True。
         """
         self.env = env
         self.mode = mode
@@ -68,6 +73,8 @@ class HMAAgentRunner:
         self.preference = preference
         self.verbose = verbose
         self.llm = llm
+        self.use_refiner = use_refiner
+        self.refiner = PlanRefiner() if use_refiner else None
 
         if agents is None:
             self.agents = make_agents(env, with_va=True)
@@ -96,6 +103,12 @@ class HMAAgentRunner:
             'fullllm_latency_ms': 0.0,
             'conf_min_history': [],
         }
+
+    # ----------------- 计划精炼 (验证器驱动) -----------------
+    def _refined(self, plan: Dict) -> Dict:
+        """对粗解 plan 做逐用户最优性精化 (PlanRefiner, 不污染环境)。"""
+        a, s = self.refiner.refine(self.env, plan['alpha'], plan['server'])
+        return {'alpha': a, 'server': s}
 
     # ----------------- 单步对外接口 -----------------
     def run_step(self, state: Optional[np.ndarray] = None,
@@ -132,8 +145,8 @@ class HMAAgentRunner:
 
     # ----------------- Distill -----------------
     def _run_distill(self, state) -> Dict:
-        cloud = np.zeros(self.env.K, dtype=bool)
         if self.policy_runner is None:
+            # 无可用权重时退化为随机
             alpha = np.random.uniform(0.01, 0.99, self.env.K).astype(np.float32)
             server = np.random.randint(0, self.env.M, self.env.K)
             conf_min = 0.0
@@ -145,11 +158,13 @@ class HMAAgentRunner:
             self.stats['n_distill'] += 1
             alpha = out['plan']['alpha']
             server = out['plan']['server']
-            cloud = out['plan'].get('cloud', np.zeros(self.env.K, dtype=bool))
             conf_min = out['conf_min']
         self.stats['conf_min_history'].append(conf_min)
+        plan = {'alpha': alpha, 'server': server}
+        if self.refiner is not None:
+            plan = self._refined(plan)
         return {
-            'plan':                 {'alpha': alpha, 'server': server, 'cloud': cloud},
+            'plan':                 plan,
             'mode_used':            'Distill',
             'conf_min':             conf_min,
             'fallback_triggered':  False,
@@ -169,8 +184,11 @@ class HMAAgentRunner:
         if self.verbose:
             print(f"[AgentRunner] FullLLM step: "
                   f"rounds={out['rounds_used']}, fallback={out['fallback_count']}")
+        plan = out['plan']
+        if self.refiner is not None:
+            plan = self._refined(plan)
         return {
-            'plan':                 out['plan'],
+            'plan':                 plan,
             'mode_used':            'FullLLM',
             'conf_min':             float(np.min(
                 out['confidence_history'][-1]) if
@@ -187,10 +205,9 @@ class HMAAgentRunner:
             if self.llm is None:
                 alpha = np.random.uniform(0.01, 0.99, self.env.K).astype(np.float32)
                 server = np.random.randint(0, self.env.M, self.env.K)
-                cloud = np.zeros(self.env.K, dtype=bool)
                 conf_min = 0.0
                 self.stats['conf_min_history'].append(conf_min)
-                return {'plan': {'alpha': alpha, 'server': server, 'cloud': cloud},
+                return {'plan': {'alpha': alpha, 'server': server},
                         'mode_used': 'Hybrid-Random',
                         'conf_min': conf_min,
                         'fallback_triggered': False}
@@ -202,7 +219,6 @@ class HMAAgentRunner:
         self.stats['distill_latency_ms'] += (t1 - t0) * 1000
         alpha = out['plan']['alpha']
         server = out['plan']['server']
-        cloud = out['plan'].get('cloud', np.zeros(self.env.K, dtype=bool))
         conf_min = out['conf_min']
         self.stats['conf_min_history'].append(conf_min)
         self.stats['n_distill'] += 1
@@ -227,16 +243,22 @@ class HMAAgentRunner:
             if self.verbose:
                 print(f"[AgentRunner] Hybrid fallback: "
                       f"conf_min={conf_min:.3f} < tau_low={self.tau_low:.2f}")
+            plan = debate_out['plan']
+            if self.refiner is not None:
+                plan = self._refined(plan)
             return {
-                'plan':                debate_out['plan'],
+                'plan':                plan,
                 'mode_used':           'Hybrid-LLM' if self.llm is not None else 'Hybrid-Heuristic',
                 'conf_min':            conf_min,
                 'fallback_triggered': True,
                 'rounds_used':         debate_out['rounds_used'],
                 'va_accept':          debate_out['va_result']['accept'],
             }
+        plan = {'alpha': alpha, 'server': server}
+        if self.refiner is not None:
+            plan = self._refined(plan)
         return {
-            'plan':                {'alpha': alpha, 'server': server, 'cloud': cloud},
+            'plan':                plan,
             'mode_used':           'Hybrid-Distill',
             'conf_min':            conf_min,
             'fallback_triggered': False,
