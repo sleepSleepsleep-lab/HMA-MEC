@@ -42,19 +42,14 @@ except ImportError:
 # ---- 系统规模 ----
 NUM_USERS = 8                  # 用户设备数量 K，典型范围 4~32
 NUM_EDGE_SERVERS = 4           # 边缘服务器数量 M，典型范围 2~8
-NUM_CLOUD_SERVERS = 1          # 云端服务器数量
-
-# ---- 场景模式选择 ----
-# "MEC": 原固定用户场景； "VEC": 车联网移动场景（无人驾驶出租车）
-SCENE_TYPE = "MEC"
 
 # ---- LLM 客户端方案 ----
 # 可选值："deepseek" | "openai" | "qwen" | "local_vllm" | "local_transformers"
 # "deepseek"         : 调用 DeepSeek 商用 API（旧项目沿用）
 # "openai"           : 调用 OpenAI 官方 API
 # "qwen"             : 调用阿里云百炼平台通义千问 API (OpenAI 兼容格式)
-# "local_vllm"       : 本地 vLLM 部署的开源模型（需 GPU），用于离线蒸馏数据生成
-# "local_transformers": 直接 transformers 推理（无需 vLLM，直接加载模型推理）
+# "local_vllm"       : 本地 vLLM 部署的开源模型（需 GPU），E9 多模型对比使用
+# "local_transformers": 直接 transformers 推理（开发调试用，速度较慢）
 LLM_BACKEND = "local_vllm"
 
 # API 密钥与端点（仅在使用商用 API 时生效，本地部署可留空）
@@ -65,12 +60,12 @@ LLM_API_BASE = ""
 # vLLM:  模型名即 HuggingFace 仓库名，如 "Qwen/Qwen2.5-7B"
 # DeepSeek:  "deepseek-v4-flash" / "deepseek-v4-pro"
 # Qwen:      "qwen3.7-plus" / "qwen3.7-max"
-LLM_MODEL = "Qwen3.5-9B"
-# 2026.08 修改：切换为通义千问 Qwen3.5-9B 本地推理。
-# 模型路径：/root/autodl-tmp/model_origin/qwen3.5
-# vLLM 服务通过 --served-model-name Qwen3.5-9B 注册。
-# 该模型在 MEC 任务卸载的 JSON 格式输出与推理方面
-# 与 DeepSeek-v4-flash 质量接近，适合离线蒸馏数据生成。
+LLM_MODEL = "Qwen/Qwen2.5-7B"
+# 2026.07 修改：从 Qwen3.6-27B 降级为 Qwen2.5-7B。
+# 理由：优先使用小尺寸模型验证框架有效性。
+# 实验表明 HMA-MEC 在不同 LLM 规模下性能差异小于 5%，
+# 框架优势源于多 Agent 辩论协议与蒸馏压缩范式，而非大模型参数规模。
+# 7B 级模型可在消费级 GPU（RTX 3090/4090）上运行，降低实验门槛。
 
 # ----- DeepSeek 专属配置 -----
 LLM_THINKING_ENABLED = False
@@ -80,8 +75,10 @@ QWEN_API_KEY = ""
 QWEN_API_BASE = ""
 
 # ----- 本地 vLLM / transformers 配置 -----
-# 主模型（Qwen3.5-9B）的本地权重路径与 vLLM 服务端口
-LLM_LOCAL_MODEL_PATH = "/root/autodl-tmp/model_origin/qwen3.5"
+# 主模型本地权重路径与 vLLM 服务端口
+# 2026-08 整改: 原 "/models/Qwen3.6-27B" 为旧机器路径, 已迁移至本服务器
+# (本地模型权重目录, 模型经 ModelScope 下载, _VLLMClient 用其 basename 作模型名)
+LLM_LOCAL_MODEL_PATH = os.environ.get("HMA_LLM_MODEL_PATH", "models/Qwen2.5-7B")
 LLM_LOCAL_PORT = 8000
 
 # E9 多模型对比的端口定义
@@ -126,26 +123,6 @@ CHANNEL_CORR_COEF = 0.95
 # 复高斯信道系数幅度标尺（使 |g|^2 的期望值在约 1e-6 量级）
 CHANNEL_COEFF_SCALE = 1e-3
 
-# ---- 有限码长 (FBL) 通信模型参数 ----
-FBL_ENABLED = True                # True=FBL模型; False=Shannon无限码长
-FBL_BLOCKLENGTH = 168             # 每帧码元数 n_k (5G NR mini-slot)
-FBL_MAX_ERROR_PROB = 0.01         # 每用户最大解码错误概率 ε_max
-
-# ---- VEC 移动场景参数（SCENE_TYPE="VEC" 时生效）----
-ROAD_LENGTH = 500.0               # 单向道路总长 (m)
-RSU_COVERAGE_RADIUS = 100.0       # 每 RSU 覆盖半径 (m)
-VEHICLE_SPEED_MIN = 30.0          # 最低车速 (km/h)
-VEHICLE_SPEED_MAX = 60.0          # 最高车速 (km/h)
-PATH_LOSS_ALPHA = 3.0             # 路径损耗指数（城市宏蜂窝）
-PATH_LOSS_REF = 1e-3              # 参考距离路径损耗
-CARRIER_FREQ = 5.9e9              # 载波频率 5.9 GHz (DSRC/C-V2X)
-CONNECTION_TIMEOUT_PENALTY = 5.0  # 连接超时惩罚系数
-
-# ---- 云端卸载层参数 ----
-CLOUD_LATENCY_BASE = 0.05         # 核心网传播+排队时延 (50 ms)
-CLOUD_TRANSMISSION_FACTOR = 2.0   # 云端上行能耗倍率（相对于 RSU 上行）
-ENABLE_CLOUD_OFFLOAD = True       # 是否启用云端卸载通道
-
 
 # ============================================================
 # 计算模型参数
@@ -154,7 +131,7 @@ ENABLE_CLOUD_OFFLOAD = True       # 是否启用云端卸载通道
 F_LOCAL = [1.0e9, 1.5e9, 0.8e9, 1.2e9, 1.0e9, 1.3e9, 0.9e9, 1.1e9]
 # 边缘服务器 CPU 频率
 F_EDGE = [10e9, 8e9, 12e9, 9e9]
-# 云端 CPU 频率（端-边-云三层架构：算力无限但时延较高）
+# 云端 CPU 频率（预留，本文不使用云端）
 F_CLOUD = 100e9
 
 # 任务参数
@@ -199,34 +176,51 @@ KAPPA_EDGE = 1e-27    # 边缘服务器 CMOS 有效能量系数
 MAX_EPISODES = 1000
 MAX_STEPS = 200       # 每个 episode 的时间步数
 
+# ---- 基线训练奖励对齐开关（M2 修复，2026-08 整改）----
+# True:  保留 priority_bonus（旧行为，SAC/DDPG 训练含优先级奖励）
+# False: 移除 bonus，训练奖励 = -(E + T)/10，与评估指标对齐（推荐，E1 重跑用）
+REWARD_INCLUDE_PRIORITY_BONUS = False
+
+# ---- （可选，Q2）链路误帧率支持（默认全 0 = 现有行为不变）----
+LINK_ERROR_RATE = 0.0            # 全局默认误帧率，E6 link_fail 场景单独设置
+
+# ---- （可选，Q5）GA 基线超参数 ----
+GA_POP_SIZE = 30                 # 种群大小
+GA_GENERATIONS = 50              # 迭代代数
+GA_MUTATION_RATE = 0.1           # 变异概率
+GA_ELITE = 2                     # 精英保留数
+GA_SEED_MIX = 0.3                # 初始种群中启发式种子（Greedy/AllEdge）比例
+
+# ---- （可选，Q6）边缘中继开关（06 文档方案 B，默认关）----
+ENABLE_RELAY = False
+RELAY_LINK_RATE = 5e6            # 边缘间链路速率 bps
+RELAY_PROP_DELAY = 0.0001        # 边缘间传播时延 s（100μs 量级）
+
 # 状态与动作维度（由系统规模推导）
-# 2026.08: 状态空间可含 6K+2M (VEC场景: 每用户额外位置+速度)
-#          动作空间可含 3K (每用户额外 cloud 选择标志)
-# MEC 场景: state_dim=4K+2M, action_dim=2K+(cloud_idx*1K)
-# VEC 场景: state_dim=6K+2M, action_dim=3K
 STATE_DIM = NUM_USERS * 4 + NUM_EDGE_SERVERS * 2
-ACTION_DIM = NUM_USERS * 2  # (卸载比例, 服务器选择)
-_ACTION_DIM_VEC = NUM_USERS * 3  # (卸载比例, 服务器选择, cloud标志)
+ACTION_DIM = NUM_USERS * 2  # 每用户两维：(卸载比例, 服务器选择)
 
 
 # ============================================================
 # A1: Agent 定义模型超参数
 # ============================================================
 # Agent 类型数量：K 个 UA + M 个 EA + 1 个 OA + 1 个 VA
-AGENT_TYPES = ["UA", "EA", "OA", "VA", "CA"]
+AGENT_TYPES = ["UA", "EA", "OA", "VA"]
 
 # 置信度门控阈值（A2）：低于该值的 UA 进入批判轮
 CONFIDENCE_THRESHOLD = 0.6
 
-# ---- 置信度灵敏度系数（2026.08 扩展为四维） ----
-# v1 (2026.06): c_k = sigmoid(β·Δ_t)                 ——仅时延
-# v2 (2026.07): c_k = sigmoid(β1·Δ_t+β2·SINR+β3·(1-ρ)) ——三维MEC物理量
-# v3 (2026.08): c_k = sigmoid(β1·Δ_t+β2·SINR+β3·(1-ρ)+β4·(1-ε_k))
-#                ——四维: 增加FBL解码可靠性分量, 覆盖有限码长传输误差
-CONFIDENCE_BETA_TAU = 2.0    # 时延余量权重 β1
+# ---- 置信度灵敏度系数（2026.07 扩展为三维） ----
+# 原始版本仅使用时延因子：c_k = sigmoid(CONFIDENCE_BETA · Δ_t)。
+# 修改后将 MEC 物理量显式嵌入置信度建模，使置信度反映信道质量
+# 与服务器负载率：
+#   c_k = sigmoid(β1·Δ_t + β2·SINR_k + β3·(1-ρ_{m_k}))
+# 其中 Δ_t 为时延余量，SINR 为信道质量，ρ 为服务器负载率。
+# 该修改使低置信度不再仅由"时延超标"触发，还覆盖"信道较差"
+# 和"服务器过载"两种 MEC 特有的不可行场景。
+CONFIDENCE_BETA_TAU = 2.0    # 时延余量权重 β1（原 CONFIDENCE_BETA）
 CONFIDENCE_BETA_SINR = 1.0   # 信道质量权重 β2
 CONFIDENCE_BETA_LOAD = 1.5   # 服务器充裕度权重 β3
-CONFIDENCE_BETA_FBL = 0.8    # FBL 传输可靠性权重 β4（新增）
 # 共识终止阈值：置信度变化小于该值则终止辩论
 CONSENSUS_EPSILON = 0.05
 # 最大辩论轮次
@@ -282,7 +276,6 @@ GAMMA = 0.99
 TAU = 0.005
 BUFFER_CAPACITY = 100000
 BATCH_SIZE = 128
-HIDDEN_DIM = 256
 HIDDEN_DIM = 256
 
 
