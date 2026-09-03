@@ -31,7 +31,7 @@ from local.baselines import SAC_EPOCHS, DDPG_EPOCHS
 # 显眼配置区
 K_LIST = [4, 8, 12, 16, 24, 32]
 M_FIX  = 4
-N_SEEDS    = 2
+N_SEEDS    = 4
 N_EPISODES = 3
 N_STEPS    = 100
 SAC_EP    = 30
@@ -66,6 +66,7 @@ def main():
             method_specs.append({'name': 'HMA-Hybrid'})
 
         results = run_multi_episodes(method_specs, K=K, M=M_FIX,
+                                  record_experiment="e2",
                                        n_seeds=N_SEEDS,
                                        n_episodes=N_EPISODES,
                                        n_steps=N_STEPS, verbose=False)
