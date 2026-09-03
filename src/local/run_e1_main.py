@@ -26,7 +26,7 @@ sys.path.insert(0, SRC)
 
 from config import (
     NUM_USERS, NUM_EDGE_SERVERS, MAX_STEPS,
-    RESULTS_DIR, SEED,
+    RESULTS_DIR, SEED, GA_POP_SIZE, GA_GENERATIONS,
 )
 from local.experiment_common import run_multi_episodes, save_npz
 from local.baselines import SAC_EPOCHS, DDPG_EPOCHS
@@ -35,11 +35,11 @@ from local.baselines import SAC_EPOCHS, DDPG_EPOCHS
 # ============================================================
 # 显眼配置区
 # ============================================================
-N_SEEDS    = 2             # 种子数; 论文/期刊建议 5
-N_EPISODES = 3             # 每种子下 episode 数; 期刊建议 50
-N_STEPS    = 100           # 每 episode 步数 (缩短到 100 验证用; 论文用 200)
-SAC_EP    = 30             # SAC 训练 epoch; 论文建议 500
-DDPG_EP   = 30             # DDPG 训练 epoch
+N_SEEDS    = 5             # 种子数 (D3 整改: 原 2, 论文规模 5)
+N_EPISODES = 50            # 每种子下 episode 数 (D3 整改: 原 3, 论文规模 50)
+N_STEPS    = 200           # 每 episode 步数 (D3 整改: 原 100, 论文规模 200)
+SAC_EP    = 500            # SAC 训练 epoch (D3/M3 整改: 原 30, 论文规模 500)
+DDPG_EP   = 500            # DDPG 训练 epoch (原 30)
 # USE_HMA: (Distill, Hybrid) 任选启用; FullLLM 仅在用户允许调用 LLM 时启用
 USE_HMA   = (True, True)
 
@@ -47,16 +47,39 @@ OUTPUT_NPZ  = os.path.join(RESULTS_DIR, "e1_comparison.npz")
 OUTPUT_JSON = os.path.join(RESULTS_DIR, "e1_comparison.json")
 
 
+def _save_callback(partial):
+    """长跑增量保存: 每完成一个方法立即落盘, 防止中途失败丢失已算结果。"""
+    import numpy as np
+    from local.experiment_common import save_npz
+    save_npz(OUTPUT_NPZ, partial)
+    with open(OUTPUT_JSON, "w", encoding="utf-8") as f:
+        json.dump({
+            m: {'mean': d['mean'], 'std': d['std'],
+                'n_samples': len(d['per_seed'])}
+            for m, d in partial.items()
+        }, f, ensure_ascii=False, indent=2)
+    print(f"  [增量保存] 已保存 {len(partial)} 个方法 -> {OUTPUT_NPZ} / {OUTPUT_JSON}")
+
+
 # ============================================================
 # 主入口
 # ============================================================
-def main():
+def main(smoke=False, llm_backend=None):
+    global N_SEEDS, N_EPISODES, N_STEPS, SAC_EP, DDPG_EP
+    if smoke:
+        # --smoke: 临时小参数验证管线（不产生论文级数据）
+        N_SEEDS, N_EPISODES, N_STEPS = 1, 1, 10
+        SAC_EP, DDPG_EP = 5, 5
+    backend = llm_backend or ('heuristic_proxy' if smoke else 'local_vllm')
+    b7_epochs = 5 if smoke else 300
+
     print("=" * 60)
     print("  E1 主对比实验 (7-8 个方法 × 多种子)")
     print("=" * 60)
     print(f"  K={NUM_USERS}  M={NUM_EDGE_SERVERS}  "
           f"seeds={N_SEEDS}  ep/seed={N_EPISODES}  "
           f"steps/ep={N_STEPS}")
+    print(f"  B7/B8 LLM 后端: {backend}")
     method_specs = [
         {'name': 'Greedy',    },
         {'name': 'AllLocal', },
@@ -64,19 +87,21 @@ def main():
         {'name': 'Random',   },
         {'name': 'SAC',       "epochs": SAC_EP},
         {'name': 'DDPG',      "epochs": DDPG_EP},
+        # C5 整改: GA 离线最优参考 (Q5) + B7/B8 真实现 (01 文档, 替换原 B7-COMLLM-lite TODO)
+        {'name': 'GA',        "pop": GA_POP_SIZE, "gens": GA_GENERATIONS},
+        {'name': 'B7-LeDRL',  'epochs': b7_epochs, 'llm_backend': backend},
+        {'name': 'B8-SingleLLM', 'llm_backend': backend},
     ]
     if USE_HMA[0]: method_specs.append({'name': 'HMA-Distill'})
     if USE_HMA[1]: method_specs.append({'name': 'HMA-Hybrid'})
-    # 同时增加 B7 (COMLLM-lite) 启发式 LLM 单决策者对照
-    # 实现位于 local.baselines. 单一 LLM 决策者直接以启发式 AllEdge 替代
-    # (不调用 LLM 时, COMLLM-lite 的"语义推理"等价于 AllEdge 启发式)
-    # method_specs.append({'name': 'B7-COMLLM-lite'})  # TODO: 启用开关
 
     results = run_multi_episodes(
         method_specs,
         K=NUM_USERS, M=NUM_EDGE_SERVERS,
         n_seeds=N_SEEDS, n_episodes=N_EPISODES, n_steps=N_STEPS,
         verbose=False,
+        save_callback=_save_callback,   # 2026-08: 长跑增量保存
+        record_experiment="e1",          # results_store: 运行中逐 episode 记录
     )
     save_npz(OUTPUT_NPZ, results)
 
@@ -108,4 +133,12 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--smoke", action="store_true",
+                        help="小规模冒烟(1 seed×1 ep×10 步, B7/B8 用假 LLM)")
+    parser.add_argument("--llm-backend", default=None,
+                        help="B7/B8 的 LLM 后端: local_vllm/deepseek/openai/qwen/"
+                             "local_transformers, 或 heuristic_proxy(假 LLM)")
+    args = parser.parse_args()
+    main(smoke=args.smoke, llm_backend=args.llm_backend)
