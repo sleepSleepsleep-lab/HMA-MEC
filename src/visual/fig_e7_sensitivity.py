@@ -1,16 +1,18 @@
 # -*- coding: utf-8 -*-
 """Fig 9: E7 hypersensitivity sweeps. 4-panel grid (tau_c, beta, eps_c, delta_v)."""
 
-import os, sys, numpy as np
+import os, sys, numpy as np, json
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.dirname(HERE); ROOT = os.path.dirname(SRC)
 sys.path.insert(0, SRC)
+sys.path.insert(0, "/root/.zcode/skills/nature-figure/scripts")
+from audit_panel_alignment import require_matplotlib_panel_alignment
 from config import RESULTS_DIR
-from visual.palette import (set_paper_style, PALETTE,
-                              method_color)
+from visual.palette import (set_paper_style, PALETTE, method_color,
+                              save_figure)
 
 set_paper_style()
 OUT_DIR = os.path.join(ROOT, "latex", "figure")
@@ -46,13 +48,10 @@ def main():
         fig, axes = plt.subplots(2, 2, figsize=(7.16, 5.0))
         for ax in axes.ravel():
             ax.text(0.5, 0.5, "TBD - waiting for E7 data",
-                    ha='center', va='center', fontsize=11)
+                    ha='center', va='center', fontsize=17)
             ax.axis('off')
-        fig.savefig(os.path.join(OUT_DIR, "fig_e7_sensitivity.pdf"),
-                    format="pdf", dpi=PDF_DPI, bbox_inches='tight')
-        fig.savefig(os.path.join(OUT_DIR, "fig_e7_sensitivity.tiff"),
-                    format="tiff", dpi=TIFF_DPI, bbox_inches='tight',
-                    pil_kwargs={"compression": "tiff_lzw"})
+        save_figure(fig, "fig_e7_sensitivity", OUT_DIR)
+        save_figure(fig, "fig_e7_sensitivity", OUT_DIR)
         plt.close(fig)
         print("  placeholder saved"); return
 
@@ -78,10 +77,10 @@ def main():
         line_l,   = ax1.plot(xs, l_arr, '-', marker='s', ms=3,
                               color=PALETTE['hma_hybrid'],
                               linewidth=1.5, label='Latency (s)')
-        ax1.set_xlabel(meta['xlabel'], fontsize=8)
-        ax1.set_ylabel(r'Energy/latency', fontsize=8)
-        ax1.tick_params(axis='y', labelsize=7)
-        ax1.tick_params(axis='x', labelsize=7)
+        ax1.set_xlabel(meta['xlabel'], fontsize=14)
+        ax1.set_ylabel(r'Energy/latency', fontsize=14)
+        ax1.tick_params(axis='y', labelsize=13)
+        ax1.tick_params(axis='x', labelsize=13)
         ax1.grid(True, alpha=0.3)
 
         # secondary axis: success/sla (%)
@@ -92,8 +91,8 @@ def main():
         line_sla, = ax2.plot(xs, sla_arr, '--', marker='D', ms=3,
                               color=PALETTE['hma_fullllm'],
                               linewidth=1.2, label='SLA (%)')
-        ax2.set_ylabel(r'Success / SLA (%)', fontsize=8)
-        ax2.tick_params(axis='y', labelsize=7)
+        ax2.set_ylabel(r'Success / SLA (%)', fontsize=14)
+        ax2.tick_params(axis='y', labelsize=13)
         ax2.grid(False)
 
         # vertical line at default value
@@ -103,7 +102,7 @@ def main():
         except Exception:
             pass
 
-        ax1.set_title(f"{tlab} {param}", pad=6, fontsize=9, weight='bold')
+        ax1.set_title(f"{tlab} {param}", pad=6, fontsize=15, weight='bold')
 
         # legend only in last panel
         if tlab == '(d)':
@@ -111,14 +110,21 @@ def main():
             labels = [l.get_label() for l in lines]
             fig.legend(lines, labels, loc='upper center',
                         bbox_to_anchor=(0.5, 1.02), ncol=4,
-                        fontsize=7, frameon=False)
+                        fontsize=13, frameon=False)
 
     plt.tight_layout(rect=(0, 0, 1, 0.97))
-    fig.savefig(os.path.join(OUT_DIR, "fig_e7_sensitivity.pdf"),
-                format="pdf", dpi=PDF_DPI, bbox_inches='tight')
-    fig.savefig(os.path.join(OUT_DIR, "fig_e7_sensitivity.tiff"),
-                format="tiff", dpi=TIFF_DPI, bbox_inches='tight',
-                pil_kwargs={"compression": "tiff_lzw"})
+    save_figure(fig, "fig_e7_sensitivity", OUT_DIR)
+    require_matplotlib_panel_alignment(
+        fig,
+        json_out=os.path.join(OUT_DIR, "fig_e7_sensitivity.alignment.json"),
+        overlay_svg=os.path.join(OUT_DIR, "fig_e7_sensitivity.alignment.svg"),
+        tolerance_pt=1.5, gutter_tolerance_pt=1.5, strict=True,
+    )
+    from audit_panel_alignment import matplotlib_layout_manifest
+    manifest = matplotlib_layout_manifest(fig)
+    with open(os.path.join(OUT_DIR, "fig_e7_sensitivity.layout.json"), "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh, indent=2)
+    save_figure(fig, "fig_e7_sensitivity", OUT_DIR)
     print("  saved: fig_e7_sensitivity.pdf/.tiff")
 
 
