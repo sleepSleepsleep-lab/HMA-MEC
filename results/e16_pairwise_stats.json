@@ -1,0 +1,20 @@
+{
+  "vs_SingleLLM1_J": {
+    "n": 60,
+    "mean_diff_j": 0.10598333333333336,
+    "debat_better": 37,
+    "wilcoxon_p": 0.16603457310653225
+  },
+  "vs_SingleLLM5_J": {
+    "n": 60,
+    "mean_diff_j": -0.05651666666666673,
+    "debat_better": 38,
+    "wilcoxon_p": 0.08834057917746
+  },
+  "vs_SingleLLM1_suc": {
+    "n": 60,
+    "mean_diff_suc": -0.5666666666666667,
+    "debat_better": 24,
+    "wilcoxon_p": 0.6888076327111559
+  }
+}

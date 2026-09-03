@@ -1,0 +1,17 @@
+{
+ "Greedy": {
+  "mean": {
+   "energy": 0.7428932932398313,
+   "latency": 0.8830271566585137,
+   "success_rate": 0.875,
+   "priority_sla": 0.25
+  },
+  "std": {
+   "energy": 0.0970802685425513,
+   "latency": 0.12025013910446497,
+   "success_rate": 0.125,
+   "priority_sla": 0.25
+  },
+  "n_samples": 2
+ }
+}

@@ -1,0 +1,44 @@
+{
+  "rows": [
+    {
+      "K": 4,
+      "M": 4,
+      "calls": 31,
+      "prompt_tokens": 18731,
+      "completion_tokens": 1615,
+      "total_tokens": 20346,
+      "rounds_used": 3,
+      "wall_s": 39.98773789405823
+    },
+    {
+      "K": 8,
+      "M": 4,
+      "calls": 43,
+      "prompt_tokens": 35086,
+      "completion_tokens": 2312,
+      "total_tokens": 37398,
+      "rounds_used": 3,
+      "wall_s": 55.844359397888184
+    },
+    {
+      "K": 12,
+      "M": 4,
+      "calls": 55,
+      "prompt_tokens": 55473,
+      "completion_tokens": 2983,
+      "total_tokens": 58456,
+      "rounds_used": 3,
+      "wall_s": 73.66223549842834
+    },
+    {
+      "K": 16,
+      "M": 4,
+      "calls": 67,
+      "prompt_tokens": 80341,
+      "completion_tokens": 4000,
+      "total_tokens": 84341,
+      "rounds_used": 3,
+      "wall_s": 98.6480176448822
+    }
+  ]
+}

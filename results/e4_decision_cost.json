@@ -1,0 +1,9 @@
+{
+ "decision_cost_ms_per_step": {
+  "HMA-Distill_(\u84b8\u998f+Refiner)": 54.9,
+  "MPC_(\u542f\u53d1\u5f0f\u79cd\u5b50+Refiner)": 7.1,
+  "GA_(pop50gen100)": 750.2,
+  "FullLLM_(CW-Debate, 5\u8f6e)": 60467.7
+ },
+ "note": "K=8,M=4,RUN\u5730:\u542b\u53cd\u4e8b\u5b9e\u9a8c\u8bc1\u5668\u7cbe\u5316\u95ed\u73af vs \u79bb\u7ebf\u641c\u7d22 vs \u5b8c\u6574LLM\u8fa9\u8bba"
+}

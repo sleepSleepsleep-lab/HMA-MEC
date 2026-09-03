@@ -1,0 +1,9 @@
+numpy==2.3.2
+scipy==1.18.0
+torch==2.8.0
+matplotlib>=3.8
+openai>=1.30
+requests
+
+# 以下仅复现 FullLLM 辩论 / E9 多后端 / 蒸馏数据采集时需要（Linux + GPU）：
+# vllm==0.27.1

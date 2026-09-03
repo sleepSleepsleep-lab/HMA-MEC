@@ -1,0 +1,19 @@
+{
+  "analytic": {
+    "n_users": 24,
+    "cloud_better_than_edge_frac": 0.75,
+    "cloud_deadline_ok_frac": 1.0,
+    "mean_T_local": 2.223004962745508,
+    "mean_T_edge": 0.27763591037702173,
+    "mean_T_cloud": 0.15593887428816242
+  },
+  "numeric": {
+    "cloud_selection_user_frac": 0.0,
+    "cloud_selection_state_frac": 0.0,
+    "J_no_cloud_mean": 0.7942315152170596,
+    "J_with_cloud_mean": 0.7942315152170596,
+    "J_gain_with_cloud_pct": 0.0,
+    "cloud_solution_suc": 0.95,
+    "cloud_solution_T": 0.6100649476331514
+  }
+}

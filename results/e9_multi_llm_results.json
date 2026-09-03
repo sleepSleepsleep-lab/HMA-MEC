@@ -1,0 +1,103 @@
+{
+  "HMA-Distill (Qwen2.5-7B)": {
+    "mean": {
+      "energy": 1.1342754431909745,
+      "latency": 0.7461390289538861,
+      "success_rate": 0.8919166666666667,
+      "priority_sla": 0.6666666666666666
+    },
+    "std": {
+      "energy": 0.2309381374160257,
+      "latency": 0.16354669189974333,
+      "success_rate": 0.10518422991219843,
+      "priority_sla": 0.47140452079103173
+    }
+  },
+  "HMA-Distill (Llama-3.1-8B)": {
+    "mean": {
+      "energy": 1.1427097966083615,
+      "latency": 0.7507586233307798,
+      "success_rate": 0.8800833333333334,
+      "priority_sla": 0.6666666666666666
+    },
+    "std": {
+      "energy": 0.22124783434706463,
+      "latency": 0.17334669430661262,
+      "success_rate": 0.11413119887022813,
+      "priority_sla": 0.47140452079103173
+    }
+  },
+  "HMA-Distill (Mistral-7B)": {
+    "mean": {
+      "energy": 1.142049370867544,
+      "latency": 0.7467752738724498,
+      "success_rate": 0.8818333333333334,
+      "priority_sla": 0.666
+    },
+    "std": {
+      "energy": 0.22878888749927448,
+      "latency": 0.16929229881168523,
+      "success_rate": 0.11430210943907478,
+      "priority_sla": 0.47093634074791574
+    }
+  },
+  "HMA-Distill (Random)": {
+    "mean": {
+      "energy": 1.1732790378928264,
+      "latency": 0.7200572214677171,
+      "success_rate": 0.9001666666666667,
+      "priority_sla": 0.6666666666666666
+    },
+    "std": {
+      "energy": 0.2529204658909885,
+      "latency": 0.15174313468273326,
+      "success_rate": 0.10868040557320145,
+      "priority_sla": 0.47140452079103173
+    }
+  },
+  "Baseline-Greedy": {
+    "mean": {
+      "energy": 0.8832648047041186,
+      "latency": 1.0044449784203384,
+      "success_rate": 0.75,
+      "priority_sla": 0.5
+    },
+    "std": {}
+  },
+  "Baseline-AllLocal": {
+    "mean": {
+      "energy": 0.05205631390008602,
+      "latency": 2.3485302665489454,
+      "success_rate": 0.375,
+      "priority_sla": 0.0
+    },
+    "std": {}
+  },
+  "Baseline-AllEdge": {
+    "mean": {
+      "energy": 2.0400105248756413,
+      "latency": 0.588166791903499,
+      "success_rate": 0.98125,
+      "priority_sla": 1.0
+    },
+    "std": {}
+  },
+  "Baseline-Random": {
+    "mean": {
+      "energy": 1.5149941380655445,
+      "latency": 1.9425865906855984,
+      "success_rate": 0.495,
+      "priority_sla": 0.5
+    },
+    "std": {}
+  },
+  "Baseline-SAC": {
+    "mean": {
+      "energy": 1.5624196333959117,
+      "latency": 0.7124728732247938,
+      "success_rate": 1.0,
+      "priority_sla": 0.0
+    },
+    "std": {}
+  }
+}
